@@ -13,8 +13,6 @@ import numpy as np
 from random import random
 
 VERTEX_SHADER = """
-#version 450 core
-
 uniform mat4 perspective_matrix;
 uniform mat4 matrix_world;
 in vec3 position;
@@ -25,15 +23,14 @@ varying vec4 vertex_color;
 
 void main()
 {
-    gl_Position = vec4(position, 1) * matrix_world * perspective_matrix;
+    vec4 pos = vec4(position, 1) * matrix_world * perspective_matrix;
+    gl_Position = perspective_matrix * matrix_world * vec4(position, 1);
     //vertex_color = vec3(gl_VertexID / 3 == 0, gl_VertexID / 3 == 1, gl_VertexID / 3 == 2);
     vertex_color = color;
 }
 """
 
 PIXEL_SHADER = """
-#version 450 core
-
 //uniform vec4 color;
 varying vec4 vertex_color;
 
@@ -135,10 +132,10 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             for instance in depsgraph.object_instances:
                 object = instance.object
                 if object.type == 'MESH':
-                    print(object.name)
+                    print("instancing draw: " + object.name)
                     mesh = depsgraph.id_eval_get(object.data) # mesh = object.data
                     matrix_world = object.matrix_world
-                    draw = MeshDrawData(mesh, matrix_world)
+                    draw = GpuDraw(mesh, matrix_world)
                     draw.object_name = object.name
                     self.draw_calls.append(draw)
 
@@ -164,14 +161,14 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         # gpu.state.depth_test_set('LESS_EQUAL')
         # gpu.state.face_culling_set('BACK')
         bgl.glEnable(bgl.GL_DEPTH_TEST)
-        bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, bgl.GL_LINE)
+        # bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, bgl.GL_LINE)
         # bgl.glEnable(bgl.GL_CULL_FACE)
 
         for draw in self.draw_calls:
-            print("drawing:", draw.object_name, draw.elem_count, draw.transform)
-            draw.draw(context.region_data)
+            # print("drawing:", draw.object_name, draw.elem_count, draw.transform)
+            draw.draw(context.region_data.perspective_matrix)
 
-        bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, bgl.GL_FILL)
+        # bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, bgl.GL_FILL)
         bgl.glDisable(bgl.GL_DEPTH_TEST)
 
         # self.unbind_display_space_shader()
@@ -187,7 +184,7 @@ class MeshDrawData:
 
         vertices = np.empty((len(mesh.loops), 3), dtype=np.float32)
         color = np.empty((len(mesh.loops), 4), dtype=np.float32)
-        indices = np.empty((len(mesh.loop_triangles), 3), dtype=np.uint)
+        indices = np.empty((len(mesh.loop_triangles), 3), dtype=np.uintc)
         
         for  i in range(len(mesh.loops)):
             loop = mesh.loops[i]
@@ -264,6 +261,40 @@ class MeshDrawData:
         
         bgl.glUseProgram(0)
         bgl.glBindVertexArray(0)
+
+class GpuDraw:
+    def __init__(self, mesh, transform):
+        self.transform = transform
+        mesh.calc_loop_triangles()
+
+        vertices = np.empty((len(mesh.loops), 3), dtype=np.float32)
+        color = np.empty((len(mesh.loops), 4), dtype=np.float32)
+        indices = np.empty((len(mesh.loop_triangles), 3), dtype=np.uintc)
+        
+        for  i in range(len(mesh.loops)):
+            loop = mesh.loops[i]
+            vertices[i] = mesh.vertices[loop.vertex_index].co
+            color[i] = [1, 1, 1, 1]
+        mesh.loop_triangles.foreach_get("loops", np.reshape(indices, len(mesh.loop_triangles) * 3))
+
+        # fmt = gpu.types.GPUVertFormat()
+        # fmt.attr_add(id="position", comp_type='F32', len=3, fetch_mode="FLOAT")
+        # fmt.attr_add(id="color", comp_type='F32', len=4, fetch_mode="FLOAT")
+
+        # vbo = gpu.types.GPUVertBuf(len=len(vertices), format=fmt)
+        # vbo.attr_fill(id="position", data=vertices)
+        # vbo.attr_fill(id="color", data=color)
+
+        # ibo = gpu.types.GPUIndexBuf(types="TRIS", seq=indices)
+
+        self.shader = gpu.types.GPUShader(VERTEX_SHADER, PIXEL_SHADER)
+        self.batch = batch_for_shader(self.shader, 'TRIS', {"position": vertices, "color": color}, indices=indices)
+    
+    def draw(self, perspective_matrix):
+        self.shader.bind()
+        self.shader.uniform_float("matrix_world", self.transform)
+        self.shader.uniform_float("perspective_matrix", perspective_matrix)
+        self.batch.draw(self.shader)
 
 class CustomDrawData:
     def __init__(self, dimensions):

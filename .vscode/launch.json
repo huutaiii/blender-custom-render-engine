@@ -5,11 +5,20 @@
 	"version": "0.2.0",
 	"configurations": [
 		{
-			"name": "PowerShell Launch Script",
-			"type": "PowerShell",
+			"name": "Launch Blender",
+			"program": "${workspaceFolder}/launch_blender.js",
 			"request": "launch",
-			"script": "${workspaceFolder}/launch_blender.ps1",
-			"cwd": "${workspaceFolder}"
-		}
+			"skipFiles": [
+				"<node_internals>/**"
+			],
+			"type": "pwa-node"
+		},
+		// {
+		// 	"name": "PowerShell Launch Script",
+		// 	"type": "PowerShell",
+		// 	"request": "launch",
+		// 	"script": "${workspaceFolder}/launch_blender.ps1",
+		// 	"cwd": "${workspaceFolder}"
+		// }
 	]
 }
