@@ -25,4 +25,5 @@ blender = require('child_process').spawn((() => { switch (process.platform) {
 		break;
 }})(), ['-p', '0', '0', '960', '960', TEST_FILE, '--python', SCRIPT])
 
-blender.stdout.on('data', (data) => { console.log(data.toString()) })
+let line = 0
+blender.stdout.on('data', (data) => { console.log(`${line++} `, data.toString()) })

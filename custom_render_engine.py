@@ -11,32 +11,101 @@ import bgl
 from gpu_extras.batch import batch_for_shader
 import numpy as np
 from random import random
+import time
+import mathutils
 
 VERTEX_SHADER = """
-uniform mat4 perspective_matrix;
-uniform mat4 matrix_world;
 in vec3 position;
+in vec3 normal;
 in vec4 color;
-//in vec3 vertex_normal;
 
-varying vec4 vertex_color;
+out vec4 vertex_color;
+out vec3 world_normal;
+
+uniform mat4 matrix_world;
 
 void main()
 {
-    vec4 pos = vec4(position, 1) * matrix_world * perspective_matrix;
-    gl_Position = perspective_matrix * matrix_world * vec4(position, 1);
-    //vertex_color = vec3(gl_VertexID / 3 == 0, gl_VertexID / 3 == 1, gl_VertexID / 3 == 2);
+    gl_Position = matrix_world * vec4(position, 1);
+    world_normal = (matrix_world * vec4(normal, 0)).xyz;
     vertex_color = color;
 }
 """
 
-PIXEL_SHADER = """
-//uniform vec4 color;
-varying vec4 vertex_color;
+GEOMETRY_SHADER = """
+layout(triangles) in;
+layout(triangle_strip, max_vertices = 6) out;
+
+in vec4 vertex_color[];
+in vec3 world_normal[];
+
+out vec4 color;
+out vec3 normal;
+out float outline;
+
+//uniform mat4 perspective_matrix;
+uniform mat4 view_matrix;
+uniform mat4 projection_matrix;
+const float offset_scale = 0.002;
+
+vec4 offset_vertex(vec4 position, vec3 normal, vec4 view_location)
+{
+    float distance = length((position - view_location).xyz);
+    return position + vec4(normal * offset_scale * pow(distance, 1.1), 0);
+}
 
 void main()
 {
-    gl_FragColor = vec4(vertex_color.rgb, 1);
+    mat4 perspective_matrix = projection_matrix * view_matrix;
+
+    outline = 0;
+    gl_Position = perspective_matrix * gl_in[0].gl_Position;
+    color = vertex_color[0];
+    normal = world_normal[0];
+    EmitVertex();
+    gl_Position = perspective_matrix * gl_in[1].gl_Position;
+    color = vertex_color[1];
+    normal = world_normal[1];
+    EmitVertex();
+    gl_Position = perspective_matrix * gl_in[2].gl_Position;
+    color = vertex_color[2];
+    normal = world_normal[2];
+    EmitVertex();
+    EndPrimitive();
+
+    outline = 1;
+    vec4 view_location = view_matrix[3];
+    gl_Position = perspective_matrix * offset_vertex(gl_in[2].gl_Position, world_normal[2], view_location);
+    EmitVertex();
+    gl_Position = perspective_matrix * offset_vertex(gl_in[1].gl_Position, world_normal[1], view_location);
+    EmitVertex();
+    gl_Position = perspective_matrix * offset_vertex(gl_in[0].gl_Position, world_normal[0], view_location);
+    EmitVertex();
+    EndPrimitive();
+}
+"""
+
+PIXEL_SHADER = """
+in vec4 color;
+in vec3 normal;
+in float outline;
+
+uniform vec3 directional_light;
+const float hardness = 0.99;
+
+void main()
+{
+    if (outline > 0)
+    {
+        gl_FragColor = vec4(0, 0, 0, 1);
+    } 
+    else
+    {
+        vec4 base_color = color;
+        gl_FragColor = base_color * 0.1;
+        float nl = smoothstep(0, 1 - hardness, dot(normal, directional_light));
+        gl_FragColor.xyz += base_color.xyz * nl;
+    }
 }
 """
 
@@ -54,6 +123,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         self.scene_data = None
         self.draw_data = None
         self.draw_calls = []
+        self.lights = []
 
     # When the render engine instance is destroy, this is called. Clean up any
     # render engine data here, for example stopping running render threads.
@@ -133,11 +203,24 @@ class CustomRenderEngine(bpy.types.RenderEngine):
                 object = instance.object
                 if object.type == 'MESH':
                     print("instancing draw: " + object.name)
+                    start_time = time.time()
                     mesh = depsgraph.id_eval_get(object.data) # mesh = object.data
                     matrix_world = object.matrix_world
                     draw = GpuDraw(mesh, matrix_world)
                     draw.object_name = object.name
                     self.draw_calls.append(draw)
+                    print(time.time() - start_time, flush=True)
+        if first_time or depsgraph.id_type_updated('LIGHT'):
+            for light in self.lights:
+                self.lights.remove(light)
+            for instance in depsgraph.object_instances:
+                object = instance.object
+                if object.type == 'LIGHT':
+                    if object.data.type == 'SUN':
+                        print("light: ", object.name)
+                        light_direction = mathutils.Vector((0, 0, 1))
+                        light_direction.rotate(object.matrix_world.decompose()[1])
+                        self.lights.append(light_direction)
 
             
     # For viewport renders, this method is called whenever Blender redraws
@@ -152,8 +235,8 @@ class CustomRenderEngine(bpy.types.RenderEngine):
 #        # Get viewport dimensions
         # dimensions = region.width, region.height
 
-        bgl.glClearColor(0, 0, 0, 1)
-        bgl.glClear(bgl.GL_COLOR_BUFFER_BIT | bgl.GL_DEPTH_BUFFER_BIT | bgl.GL_STENCIL_BUFFER_BIT)
+        # bgl.glClearColor(0, 0, 0, 1)
+        # bgl.glClear(bgl.GL_COLOR_BUFFER_BIT | bgl.GL_DEPTH_BUFFER_BIT | bgl.GL_STENCIL_BUFFER_BIT)
         # Bind (fragment) shader that converts from scene linear to display space,
         # self.bind_display_space_shader(scene)
         # gpu.state.blend_set('ALPHA')
@@ -162,120 +245,51 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         # gpu.state.face_culling_set('BACK')
         bgl.glEnable(bgl.GL_DEPTH_TEST)
         # bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, bgl.GL_LINE)
-        # bgl.glEnable(bgl.GL_CULL_FACE)
+        bgl.glEnable(bgl.GL_CULL_FACE)
 
         for draw in self.draw_calls:
             # print("drawing:", draw.object_name, draw.elem_count, draw.transform)
-            draw.draw(context.region_data.perspective_matrix)
+            draw.draw(context.region_data, self.lights)
 
         # bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, bgl.GL_FILL)
         bgl.glDisable(bgl.GL_DEPTH_TEST)
+        bgl.glDisable(bgl.GL_CULL_FACE)
 
         # self.unbind_display_space_shader()
         # gpu.state.blend_set('NONE')
         # gpu.state.depth_test_set('NONE')
         # gpu.state.depth_mask_set(False)
-        
-class MeshDrawData:
-    def __init__(self, mesh, matrix_world):
-        mesh.calc_loop_triangles()
-        # mesh.calc_tangents()
-        self.transform = matrix_world
-
-        vertices = np.empty((len(mesh.loops), 3), dtype=np.float32)
-        color = np.empty((len(mesh.loops), 4), dtype=np.float32)
-        indices = np.empty((len(mesh.loop_triangles), 3), dtype=np.uintc)
-        
-        for  i in range(len(mesh.loops)):
-            loop = mesh.loops[i]
-            vertices[i] = mesh.vertices[loop.vertex_index].co
-            color[i] = [random(), random(), random(), 1]
-        mesh.loop_triangles.foreach_get("loops", np.reshape(indices, len(mesh.loop_triangles) * 3))
-
-        self.vertex_count = len(vertices)
-        self.elem_count = len(indices.flatten())
-        print(self.vertex_count, " ", self.elem_count)
-
-        vertices = bgl.Buffer(bgl.GL_FLOAT, [len(vertices), 3], vertices)
-        color = bgl.Buffer(bgl.GL_FLOAT, [len(color), 4], color)
-        indices = bgl.Buffer(bgl.GL_INT, [len(indices), 3], indices)
-        
-        vertex_shader = bgl.glCreateShader(bgl.GL_VERTEX_SHADER)
-        bgl.glShaderSource(vertex_shader, VERTEX_SHADER)
-        bgl.glCompileShader(vertex_shader)
-        pixel_shader = bgl.glCreateShader(bgl.GL_FRAGMENT_SHADER)
-        bgl.glShaderSource(pixel_shader, PIXEL_SHADER)
-        bgl.glCompileShader(pixel_shader)
-        self.program = bgl.glCreateProgram()
-        bgl.glAttachShader(self.program, vertex_shader)
-        bgl.glAttachShader(self.program, pixel_shader)
-        bgl.glLinkProgram(self.program)
-            
-        self.vertex_array = bgl.Buffer(bgl.GL_INT, 1)
-        bgl.glGenVertexArrays(1, self.vertex_array)
-        bgl.glBindVertexArray(self.vertex_array[0])
-        
-        self.vertex_buffer = bgl.Buffer(bgl.GL_INT, 2)
-        bgl.glGenBuffers(2, self.vertex_buffer)
-        bgl.glBindBuffer(bgl.GL_ARRAY_BUFFER, self.vertex_buffer[0])
-        bgl.glBufferData(bgl.GL_ARRAY_BUFFER, len(vertices), vertices, bgl.GL_STATIC_DRAW)
-        position_attrib_location = bgl.glGetAttribLocation(self.program, "position")
-        bgl.glVertexAttribPointer(position_attrib_location, 3, bgl.GL_FLOAT, bgl.GL_FALSE, 0, None)
-        bgl.glEnableVertexAttribArray(position_attrib_location)
-        bgl.glBindBuffer(bgl.GL_ARRAY_BUFFER, self.vertex_buffer[1])
-        bgl.glBufferData(bgl.GL_ARRAY_BUFFER, len(color), color, bgl.GL_STATIC_DRAW)
-        color_attrib_location = bgl.glGetAttribLocation(self.program, "color")
-        bgl.glVertexAttribPointer(color_attrib_location, 4, bgl.GL_FLOAT, bgl.GL_FALSE, 0, None)
-        bgl.glEnableVertexAttribArray(color_attrib_location)
-        bgl.glBindBuffer(bgl.GL_ARRAY_BUFFER, 0)
-
-        self.index_buffer = bgl.Buffer(bgl.GL_INT, 1)
-        bgl.glGenBuffers(1, self.index_buffer)
-        bgl.glBindBuffer(bgl.GL_ELEMENT_ARRAY_BUFFER, self.index_buffer[0])
-        bgl.glBufferData(bgl.GL_ELEMENT_ARRAY_BUFFER, len(indices), indices, bgl.GL_STATIC_DRAW)
-        
-        bgl.glBindVertexArray(0)
-        bgl.glBindBuffer(bgl.GL_ELEMENT_ARRAY_BUFFER, 0)
-
-        bgl.glDeleteShader(vertex_shader)
-        bgl.glDeleteShader(pixel_shader)
-    
-    def __del__(self):
-        bgl.glDeleteProgram(self.program)
-        bgl.glDeleteBuffers(2, self.vertex_buffer)
-        bgl.glDeleteBuffers(1, self.index_buffer)
-        bgl.glDeleteVertexArrays(1, self.vertex_array)
-
-    def draw(self, region_data):
-        bgl.glUseProgram(self.program)
-        bgl.glBindVertexArray(self.vertex_array[0])
-        
-        transform_location = bgl.glGetUniformLocation(self.program, "matrix_world")
-        transform_buffer = bgl.Buffer(bgl.GL_FLOAT, [4, 4], self.transform)
-        bgl.glUniformMatrix4fv(transform_location, 1, bgl.GL_FALSE, transform_buffer)
-        projection_location = bgl.glGetUniformLocation(self.program, "perspective_matrix")
-        projection_buffer = bgl.Buffer(bgl.GL_FLOAT, [4, 4], region_data.perspective_matrix)
-        bgl.glUniformMatrix4fv(projection_location, 1, bgl.GL_FALSE, projection_buffer)
-        bgl.glDrawElements(bgl.GL_TRIANGLES, self.elem_count, bgl.GL_UNSIGNED_INT, 0)
-        # bgl.glDrawArrays(bgl.GL_TRIANGLES, 0, self.vertex_count)
-        
-        bgl.glUseProgram(0)
-        bgl.glBindVertexArray(0)
 
 class GpuDraw:
     def __init__(self, mesh, transform):
         self.transform = transform
         mesh.calc_loop_triangles()
+        use_split_normals = True
+        try:
+            mesh.calc_tangents()
+        except RuntimeError:
+            use_split_normals = False
 
         vertices = np.empty((len(mesh.loops), 3), dtype=np.float32)
         color = np.empty((len(mesh.loops), 4), dtype=np.float32)
+        normals = np.empty((len(mesh.loops), 3), dtype=np.float32)
         indices = np.empty((len(mesh.loop_triangles), 3), dtype=np.uintc)
         
-        for  i in range(len(mesh.loops)):
-            loop = mesh.loops[i]
-            vertices[i] = mesh.vertices[loop.vertex_index].co
-            color[i] = [1, 1, 1, 1]
+        merged_vertices = np.empty((len(mesh.vertices), 3), dtype=np.float32)
+        mesh.vertices.foreach_get("co", np.reshape(merged_vertices, len(mesh.vertices) * 3))
+        loop_vertices = np.empty(len(mesh.loops), dtype=np.int)
+        mesh.loops.foreach_get("vertex_index", loop_vertices)
+        start_time = time.time()
+        # this is not fast enough
+        for i in range(len(mesh.loops)):
+            # loop = mesh.loops[i]
+            # vertices[i] = mesh.vertices[loop.vertex_index].co
+            # vertices[i] = merged_vertices[mesh.loops[i].vertex_index]
+            vertices[i] = merged_vertices[loop_vertices[i]]
+        print(time.time() - start_time)
         mesh.loop_triangles.foreach_get("loops", np.reshape(indices, len(mesh.loop_triangles) * 3))
+        mesh.loops.foreach_get("normal", np.reshape(normals, len(mesh.loops) * 3))
+        mesh.vertex_colors.active.data.foreach_get("color", np.reshape(color, len(mesh.loops) * 4))
 
         # fmt = gpu.types.GPUVertFormat()
         # fmt.attr_add(id="position", comp_type='F32', len=3, fetch_mode="FLOAT")
@@ -287,84 +301,20 @@ class GpuDraw:
 
         # ibo = gpu.types.GPUIndexBuf(types="TRIS", seq=indices)
 
-        self.shader = gpu.types.GPUShader(VERTEX_SHADER, PIXEL_SHADER)
-        self.batch = batch_for_shader(self.shader, 'TRIS', {"position": vertices, "color": color}, indices=indices)
+        self.shader = gpu.types.GPUShader(VERTEX_SHADER, PIXEL_SHADER, geocode=GEOMETRY_SHADER)
+        self.batch = batch_for_shader(self.shader, 'TRIS', {"position": vertices, "normal": normals, "color": color}, indices=indices)
     
-    def draw(self, perspective_matrix):
+    def draw(self, region_data, lights):
         self.shader.bind()
-        self.shader.uniform_float("matrix_world", self.transform)
-        self.shader.uniform_float("perspective_matrix", perspective_matrix)
+        try:
+            self.shader.uniform_float("matrix_world", self.transform)
+            # self.shader.uniform_float("perspective_matrix", perspective_matrix)
+            self.shader.uniform_float("view_matrix", region_data.view_matrix)
+            self.shader.uniform_float("projection_matrix", region_data.window_matrix)
+            self.shader.uniform_float("directional_light", lights[0])
+        except ValueError:
+            pass
         self.batch.draw(self.shader)
-
-class CustomDrawData:
-    def __init__(self, dimensions):
-        # Generate dummy float image buffer
-        self.dimensions = dimensions
-        width, height = dimensions
-
-        pixels = [0.1, 0.2, 0.1, 0.4] * width * height
-        pixels = bgl.Buffer(bgl.GL_FLOAT, width * height * 4, pixels)
-
-        # Generate texture
-        self.texture = bgl.Buffer(bgl.GL_INT, 1)
-        bgl.glGenTextures(1, self.texture)
-        bgl.glActiveTexture(bgl.GL_TEXTURE0)
-        bgl.glBindTexture(bgl.GL_TEXTURE_2D, self.texture[0])
-        bgl.glTexImage2D(bgl.GL_TEXTURE_2D, 0, bgl.GL_RGBA16F, width, height, 0, bgl.GL_RGBA, bgl.GL_FLOAT, pixels)
-        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MIN_FILTER, bgl.GL_LINEAR)
-        bgl.glTexParameteri(bgl.GL_TEXTURE_2D, bgl.GL_TEXTURE_MAG_FILTER, bgl.GL_LINEAR)
-        bgl.glBindTexture(bgl.GL_TEXTURE_2D, 0)
-
-        # Bind shader that converts from scene linear to display space,
-        # use the scene's color management settings.
-        shader_program = bgl.Buffer(bgl.GL_INT, 1)
-        bgl.glGetIntegerv(bgl.GL_CURRENT_PROGRAM, shader_program)
-
-        # Generate vertex array
-        self.vertex_array = bgl.Buffer(bgl.GL_INT, 1)
-        bgl.glGenVertexArrays(1, self.vertex_array)
-        bgl.glBindVertexArray(self.vertex_array[0])
-
-        texturecoord_location = bgl.glGetAttribLocation(shader_program[0], "texCoord")
-        position_location = bgl.glGetAttribLocation(shader_program[0], "pos")
-
-        bgl.glEnableVertexAttribArray(texturecoord_location)
-        bgl.glEnableVertexAttribArray(position_location)
-
-        # Generate geometry buffers for drawing textured quad
-        position = [0.0, 0.0, width, 0.0, width, height, 0.0, height]
-        position = bgl.Buffer(bgl.GL_FLOAT, len(position), position)
-        texcoord = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]
-        texcoord = bgl.Buffer(bgl.GL_FLOAT, len(texcoord), texcoord)
-
-        self.vertex_buffer = bgl.Buffer(bgl.GL_INT, 2)
-
-        bgl.glGenBuffers(2, self.vertex_buffer)
-        bgl.glBindBuffer(bgl.GL_ARRAY_BUFFER, self.vertex_buffer[0])
-        bgl.glBufferData(bgl.GL_ARRAY_BUFFER, 32, position, bgl.GL_STATIC_DRAW)
-        bgl.glVertexAttribPointer(position_location, 2, bgl.GL_FLOAT, bgl.GL_FALSE, 0, None)
-
-        bgl.glBindBuffer(bgl.GL_ARRAY_BUFFER, self.vertex_buffer[1])
-        bgl.glBufferData(bgl.GL_ARRAY_BUFFER, 32, texcoord, bgl.GL_STATIC_DRAW)
-        bgl.glVertexAttribPointer(texturecoord_location, 2, bgl.GL_FLOAT, bgl.GL_FALSE, 0, None)
-
-        bgl.glBindBuffer(bgl.GL_ARRAY_BUFFER, 0)
-        bgl.glBindVertexArray(0)
-
-    def __del__(self):
-        bgl.glDeleteBuffers(2, self.vertex_buffer)
-        bgl.glDeleteVertexArrays(1, self.vertex_array)
-        bgl.glBindTexture(bgl.GL_TEXTURE_2D, 0)
-        bgl.glDeleteTextures(1, self.texture)
-
-    def draw(self):
-        bgl.glActiveTexture(bgl.GL_TEXTURE0)
-        bgl.glBindTexture(bgl.GL_TEXTURE_2D, self.texture[0])
-        bgl.glBindVertexArray(self.vertex_array[0])
-        bgl.glDrawArrays(bgl.GL_TRIANGLE_FAN, 0, 4)
-        bgl.glBindVertexArray(0)
-        bgl.glBindTexture(bgl.GL_TEXTURE_2D, 0)
-
 
 # RenderEngines also need to tell UI Panels that they are compatible with.
 # We recommend to enable all panels marked as BLENDER_RENDER, and then
