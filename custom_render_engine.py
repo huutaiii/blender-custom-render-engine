@@ -81,6 +81,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
 #        self.draw_calls = {}
         # A hack (???) to get meshes with visible modifiers
         # doesn't work in edit mode though
+        # armature deformation also doesn't work
         meshes = {}
         for instance in depsgraph.object_instances:
             object = instance.object
@@ -192,7 +193,8 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         for object in self.mesh_objects:
             try:
                 draw = self.draw_calls[object.data.name]
-                draw.draw(object.matrix_world, context.region_data, self.lights)
+                settings = context.scene.custom_render_engine
+                draw.draw(object.matrix_world, context.region_data, self.lights, settings)
             except KeyError:
                 pass
             pass
@@ -252,7 +254,7 @@ class MeshDraw:
         self.shader = gpu.types.GPUShader(VERTEX_SHADER, PIXEL_SHADER, geocode=GEOMETRY_SHADER)
         self.batch = batch_for_shader(self.shader, 'TRIS', {"position": vertices, "normal": normals, "color": color}, indices=indices)
     
-    def draw(self, transform, region_data, lights):
+    def draw(self, transform, region_data, lights, settings):
         def min(a, b):
             if a > b:
                 return b
@@ -269,9 +271,36 @@ class MeshDraw:
             for i in range(min(len(lights), 4)):
                 packed_lights[i].xyz = lights[i]
             self.shader.uniform_float("directional_lights", packed_lights.transposed())
+            self.shader.uniform_bool("render_outlines", [settings.enable_outline])
+            self.shader.uniform_float("outline_width", settings.outline_width)
+            self.shader.uniform_float("shading_sharpness", settings.shading_sharpness)
         except ValueError:
             pass
         self.batch.draw(self.shader)
+
+class CustomRenderEngineSettings(bpy.types.PropertyGroup):
+    enable_outline: bpy.props.BoolProperty(name="Render Outlines", default=True)
+    outline_width: bpy.props.FloatProperty(name="Outline Width", default=1, min=0, soft_max=100)
+    shading_sharpness: bpy.props.FloatProperty(name="Shading Sharpness", default=1, subtype='FACTOR', min=0, max=1)
+
+class CustomRenderEnginePanel(bpy.types.Panel):
+    bl_idname = "RENDER_PT_CustomRenderEngine"
+    bl_label = "AAAAAAAAAAAaaaaaaaaaaaa"
+    bl_space_type = "PROPERTIES"
+    bl_region_type = "WINDOW"
+    bl_context = "render"
+    # COMPAT_ENGINES = {'CUSTOM'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.engine == "CUSTOM"
+
+    def draw(self, context):
+        layout = self.layout
+        settings = context.scene.custom_render_engine
+        layout.prop(settings, "enable_outline")
+        layout.prop(settings, "outline_width")
+        layout.prop(settings, "shading_sharpness")
 
 # RenderEngines also need to tell UI Panels that they are compatible with.
 # We recommend to enable all panels marked as BLENDER_RENDER, and then
@@ -291,17 +320,26 @@ def get_panels():
 
     return panels
 
+classes = [
+    CustomRenderEngine,
+    CustomRenderEngineSettings,
+    CustomRenderEnginePanel
+]
 
 def register():
     # Register the RenderEngine
-    bpy.utils.register_class(CustomRenderEngine)
+    for cls in classes:
+        bpy.utils.register_class(cls)
 
     for panel in get_panels():
         panel.COMPAT_ENGINES.add('CUSTOM')
 
+    bpy.types.Scene.custom_render_engine = bpy.props.PointerProperty(type=CustomRenderEngineSettings)
+
 
 def unregister():
-    bpy.utils.unregister_class(CustomRenderEngine)
+    for cls in classes:
+        bpy.utils.unregister_class(cls)
 
     for panel in get_panels():
         if 'CUSTOM' in panel.COMPAT_ENGINES:

@@ -4,7 +4,7 @@ in vec3 normal;
 in float outline;
 
 uniform mat4 directional_lights;
-const float sharpness = 0.99;
+uniform float shading_sharpness;
 
 void main()
 {
@@ -19,7 +19,7 @@ void main()
         for (int i = 0; i <= 3; ++i)
         {
             vec3 light = directional_lights[i].xyz;
-            float nl = smoothstep(0, 1 - sharpness, dot(normal, light));
+            float nl = smoothstep(0, 1 - shading_sharpness, dot(normal, light));
             gl_FragColor.xyz += base_color * nl;
         }
         gl_FragColor.a = 1;
