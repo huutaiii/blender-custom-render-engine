@@ -13,6 +13,7 @@ import numpy as np
 from random import random
 import time
 import mathutils
+import bl_math
 
 VERTEX_SHADER = """
 in vec3 position;
@@ -90,7 +91,7 @@ in vec4 color;
 in vec3 normal;
 in float outline;
 
-uniform vec3 directional_light;
+uniform mat4 directional_lights;
 const float hardness = 0.99;
 
 void main()
@@ -103,8 +104,12 @@ void main()
     {
         vec4 base_color = color;
         gl_FragColor = base_color * 0.1;
-        float nl = smoothstep(0, 1 - hardness, dot(normal, directional_light));
-        gl_FragColor.xyz += base_color.xyz * nl;
+        for (int i = 0; i <= 3; ++i)
+        {
+            vec3 light = directional_lights[i].xyz;
+            float nl = smoothstep(0, 1 - hardness, dot(normal, light));
+            gl_FragColor.xyz += base_color.xyz * nl;
+        }
     }
 }
 """
@@ -196,9 +201,9 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         # Loop over all object instances in the scene.
         if first_time or depsgraph.id_type_updated('OBJECT'):
             pass
-            # self.draw_calls = {}
-            for draw in self.draw_calls:
-                self.draw_calls.remove(draw)
+            self.draw_calls = []
+            # for draw in self.draw_calls:
+            #     self.draw_calls.remove(draw)
             for instance in depsgraph.object_instances:
                 object = instance.object
                 if object.type == 'MESH':
@@ -211,8 +216,9 @@ class CustomRenderEngine(bpy.types.RenderEngine):
                     self.draw_calls.append(draw)
                     print(time.time() - start_time, flush=True)
         if first_time or depsgraph.id_type_updated('LIGHT'):
-            for light in self.lights:
-                self.lights.remove(light)
+            self.lights = []
+            # for light in self.lights:
+            #     self.lights.remove(light)
             for instance in depsgraph.object_instances:
                 object = instance.object
                 if object.type == 'LIGHT':
@@ -305,13 +311,22 @@ class GpuDraw:
         self.batch = batch_for_shader(self.shader, 'TRIS', {"position": vertices, "normal": normals, "color": color}, indices=indices)
     
     def draw(self, region_data, lights):
+        def min(a, b):
+            if a > b:
+                return b
+            else:
+                return a
+
         self.shader.bind()
         try:
             self.shader.uniform_float("matrix_world", self.transform)
             # self.shader.uniform_float("perspective_matrix", perspective_matrix)
             self.shader.uniform_float("view_matrix", region_data.view_matrix)
             self.shader.uniform_float("projection_matrix", region_data.window_matrix)
-            self.shader.uniform_float("directional_light", lights[0])
+            packed_lights = mathutils.Matrix.Diagonal(mathutils.Vector((0, 0, 0, 0)))
+            for i in range(min(len(lights), 4)):
+                packed_lights[i].xyz = lights[i]
+            self.shader.uniform_float("directional_lights", packed_lights.transposed())
         except ValueError:
             pass
         self.batch.draw(self.shader)
