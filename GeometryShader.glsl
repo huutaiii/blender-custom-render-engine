@@ -12,12 +12,12 @@ out float outline;
 //uniform mat4 perspective_matrix;
 uniform mat4 view_matrix;
 uniform mat4 projection_matrix;
-const float offset_scale = 0.002;
+const float offset_scale = 0.001;
 
 vec4 offset_vertex(vec4 position, vec3 normal, vec4 view_location)
 {
     float distance = length((position - view_location).xyz);
-    return position + vec4(normal * offset_scale * pow(distance, 1.1), 0);
+    return position + vec4(normal * offset_scale * distance, 0);
 }
 
 void main()

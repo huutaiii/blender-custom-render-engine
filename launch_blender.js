@@ -16,14 +16,22 @@ const SCRIPT = GetAbsolutePath('custom_render_engine.py')
 
 console.log("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 // blender = require('child_process').spawn("cmd.exe", ["/S", "/C", BLENDER_WINDOWS + " -p 0 0 800 800"])
-blender = require('child_process').spawn((() => { switch (process.platform) {
+const file = (() => {
+	try {
+		return require('fs').readFileSync('test_file_path.txt').toString().split('\n')[0]
+	} catch (ENOENT) {
+		return TEST_FILE
+	}
+})()
+console.log(file)
+const blender = require('child_process').spawn((() => { switch (process.platform) {
 	case 'win32':
 		return BLENDER_EXEC_WINDOWS
 	case 'linux':
 		return BLENDER_EXEC_LINUX
 	default:
 		break;
-}})(), ['-p', '0', '0', '960', '960', TEST_FILE, '--python', SCRIPT])
+}})(), ['-p', '0', '0', '900', '1000', '--python', SCRIPT, file])
 
 let line = 0
 blender.stdout.on('data', (data) => { console.log(`${line++} `, data.toString()) })
