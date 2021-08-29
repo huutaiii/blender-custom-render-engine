@@ -77,17 +77,6 @@ class CustomRenderEngine(bpy.types.RenderEngine):
 
         # Get viewport dimensions
         dimensions = region.width, region.height
-
-#        self.draw_calls = {}
-        # A hack (???) to get meshes with visible modifiers
-        # doesn't work in edit mode though
-        # armature deformation also doesn't work
-        meshes = {}
-        for instance in depsgraph.object_instances:
-            object = instance.object
-            if object.type == 'MESH':
-                meshes[object.data.name] = object.data
-        # print(meshes.keys(), flush=True)
         
         if not self.scene_data:
             # First time initialization
@@ -97,13 +86,11 @@ class CustomRenderEngine(bpy.types.RenderEngine):
 
             # Loop over all datablocks used in the scene.
             for datablock in depsgraph.ids:
-                if isinstance(datablock, bpy.types.Mesh):
-                    # I don't know why `datablock` doesn't give me a mesh with its modifiers visible
-                    # neither does `depsgraph.id_eval_get(datablock)` wtf?
-                    try:
-                        self.draw_calls[datablock.name] = MeshDraw(meshes[datablock.name])
-                    except KeyError:
-                        pass
+                if isinstance(datablock, bpy.types.Object) and datablock.type == 'MESH':
+                    print(datablock.type, " ", datablock.name, flush=True)
+                    draw = MeshDraw(datablock.data)
+                    draw.object = datablock
+                    self.draw_calls[datablock.name] = draw
                 pass
         else:
             first_time = False
@@ -112,43 +99,27 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             for update in depsgraph.updates:
                 # print("Datablock updated: ", update.id.name, flush=True)
                 datablock = update.id
-                if update.is_updated_geometry:
-                    if isinstance(datablock, bpy.types.Mesh):
-                        # del self.draw_calls[datablock.name]
-                        self.draw_calls[datablock.name] = MeshDraw(meshes[datablock.name])
+                if isinstance(datablock, bpy.types.Object) \
+                and datablock.type == 'MESH' and update.is_updated_geometry:
+                    print("mesh updated: ", datablock.name, flush=True)
+                    # del self.draw_calls[datablock.name]
+                    draw = MeshDraw(datablock.data)
+                    draw.object = datablock
+                    self.draw_calls[datablock.name] = draw
 
             # Test if any material was added, removed or changed.
             if depsgraph.id_type_updated('MATERIAL'):
                 # print("Materials updated")
                 pass
 
-        # updated_geometry = None
-        # if not first_time:
-        #     updated_geometry = []
-        #     for update in depsgraph.updates:
-        #         if update.is_updated_geometry:
-        #             updated_geometry.append(update.id)
-
         # Loop over all object instances in the scene.
         if first_time or depsgraph.id_type_updated('OBJECT'):
             pass
             self.mesh_objects = []
-            # for key, draw in self.draw_calls.items():
-            #     if not draw.object: # ???
-            #         del self.draw_calls[key]
             for instance in depsgraph.object_instances:
                 object = instance.object
                 if object.type == 'MESH':
                     self.mesh_objects.append(object)
-                    # print("instancing draw: " + object.name)
-                    # start_time = time.time()
-                    # mesh = depsgraph.id_eval_get(object.data) # mesh = object.data
-                    # matrix_world = object.matrix_world
-                    # draw = MeshDraw(mesh)
-                    # draw.object = object
-                    # self.draw_calls[mesh.name] = draw
-                    # print(time.time() - start_time, flush=True)
-        # if first_time or depsgraph.id_type_updated('LIGHT'):
             self.lights = []
             # for light in self.lights:
             #     self.lights.remove(light)
@@ -171,47 +142,38 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         region = context.region
         scene = depsgraph.scene
 
-#        # Get viewport dimensions
-        # dimensions = region.width, region.height
+        # Get viewport dimensions
+        dimensions = region.width, region.height
 
-        # bgl.glClearColor(0, 0, 0, 1)
+        # bgl.glClearColor(1, 0, 0, 1)
         # bgl.glClear(bgl.GL_COLOR_BUFFER_BIT | bgl.GL_DEPTH_BUFFER_BIT | bgl.GL_STENCIL_BUFFER_BIT)
+
         # Bind (fragment) shader that converts from scene linear to display space,
         # self.bind_display_space_shader(scene)
         # gpu.state.blend_set('ALPHA')
-        # gpu.state.depth_mask_set(True)
-        # gpu.state.depth_test_set('LESS_EQUAL')
-        # gpu.state.face_culling_set('BACK')
-        bgl.glEnable(bgl.GL_DEPTH_TEST)
-        # bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, bgl.GL_LINE)
-        bgl.glEnable(bgl.GL_CULL_FACE)
+        gpu.state.depth_mask_set(True)
+        gpu.state.depth_test_set('LESS_EQUAL')
+        gpu.state.face_culling_set('BACK')
 
-        # for key, draw in self.draw_calls.items():
-        #     # print("drawing:", draw.object_name, draw.elem_count, draw.transform)
-        #     draw.draw(context.region_data, self.lights)
-        # print(self.draw_calls.items(), flush=True)
+        settings = context.scene.custom_render_engine
         for object in self.mesh_objects:
-            try:
-                draw = self.draw_calls[object.data.name]
-                settings = context.scene.custom_render_engine
-                draw.draw(object.matrix_world, context.region_data, self.lights, settings)
-            except KeyError:
-                pass
-            pass
-
-        # bgl.glPolygonMode(bgl.GL_FRONT_AND_BACK, bgl.GL_FILL)
-        bgl.glDisable(bgl.GL_DEPTH_TEST)
-        bgl.glDisable(bgl.GL_CULL_FACE)
+            draw = self.draw_calls[object.name]
+            draw.draw(object.matrix_world, context.region_data, self.lights, settings)
+        # for key, draw in self.draw_calls.items():
+        #     print(draw.object.name, " ", draw.object.hide_viewport, flush=True)
+        #     draw.draw(draw.object.matrix_world, context.region_data, self.lights, settings)
+            
 
         # self.unbind_display_space_shader()
         # gpu.state.blend_set('NONE')
-        # gpu.state.depth_test_set('NONE')
-        # gpu.state.depth_mask_set(False)
+        gpu.state.depth_test_set('NONE')
+        gpu.state.depth_mask_set(False)
+        gpu.state.face_culling_set('NONE')
 
 class MeshDraw:
-    def __init__(self, mesh):
+    def __init__(self, mesh, transform=None):
         # print("AAAAAAAAAAAAAAA", mesh, flush=True)
-        # self.transform = transform
+        self.transform = transform
         mesh.calc_loop_triangles()
         use_split_normals = True
         try:
@@ -229,16 +191,13 @@ class MeshDraw:
         loop_vertices = np.empty(len(mesh.loops), dtype=np.int)
         mesh.loops.foreach_get("vertex_index", loop_vertices)
         start_time = time.time()
-        # this is not fast enough
+        # this is not fast enough ?
         for i in range(len(mesh.loops)):
-            # loop = mesh.loops[i]
-            # vertices[i] = mesh.vertices[loop.vertex_index].co
-            # vertices[i] = merged_vertices[mesh.loops[i].vertex_index]
             vertices[i] = merged_vertices[loop_vertices[i]]
         # print(time.time() - start_time)
         mesh.loop_triangles.foreach_get("loops", np.reshape(indices, len(mesh.loop_triangles) * 3))
         mesh.loops.foreach_get("normal", np.reshape(normals, len(mesh.loops) * 3))
-        if mesh.vertex_colors.active != None:
+        if mesh.vertex_colors.active:
             mesh.vertex_colors.active.data.foreach_get("color", np.reshape(color, len(mesh.loops) * 4))
 
         # fmt = gpu.types.GPUVertFormat()
