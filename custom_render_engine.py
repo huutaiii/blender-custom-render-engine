@@ -14,10 +14,39 @@ from random import random
 import time
 import mathutils
 import bl_math
+import os
 
-VERTEX_SHADER = open("VertexShader.glsl").read()
-GEOMETRY_SHADER = open("GeometryShader.glsl").read()
-PIXEL_SHADER = open("PixelShader.glsl").read()
+bl_info = {
+    "name": "Custom Render Engine",
+    # "description": "Single line explaining what this script exactly does.",
+    "author": "huutai",
+    "version": (0, 1),
+    "blender": (2, 90, 0),
+    # "location": "View3D > Add > Mesh",
+    # "warning": "", # used for warning icon and text in addons panel
+    # "doc_url": "http://wiki.blender.org/index.php/Extensions:2.6/Py/"
+    #             "Scripts/My_Script",
+    # "tracker_url": "https://developer.blender.org/maniphest/task/edit/form/2/",
+    # "support": "COMMUNITY",
+    "category": "Render",
+}
+
+def get_script_directory():
+    delimiter = None
+    if os.name == 'nt':
+        delimiter = '\\'
+    if os.name == 'posix':
+        delimiter = '/'
+    if not delimiter:
+        raise RuntimeError("Platform not supported")
+    names = __file__.split(delimiter)
+    path = delimiter.join(names[:len(names)-1]) + delimiter
+    del delimiter
+    return path
+
+VERTEX_SHADER = open(get_script_directory() + "VertexShader.glsl").read()
+GEOMETRY_SHADER = open(get_script_directory() + "GeometryShader.glsl").read()
+PIXEL_SHADER = open(get_script_directory() + "PixelShader.glsl").read()
 
 class CustomRenderEngine(bpy.types.RenderEngine):
     # These three members are used by blender to set up the

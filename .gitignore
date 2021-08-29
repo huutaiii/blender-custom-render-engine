@@ -1,2 +1,5 @@
 *.blend[0-9]
 test_file_path.txt
+custom_render_engine/
+custom_render_engine.zip
+__pycache__
