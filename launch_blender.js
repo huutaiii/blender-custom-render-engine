@@ -18,7 +18,7 @@ console.log("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 // blender = require('child_process').spawn("cmd.exe", ["/S", "/C", BLENDER_WINDOWS + " -p 0 0 800 800"])
 const file = (() => {
 	try {
-		return require('fs').readFileSync('test_file_path.txt').toString().split('\n')[0]
+		return require('fs').readFileSync('test_file_path.txt').toString().split('\n')[0].trim()
 	} catch (ENOENT) {
 		return TEST_FILE
 	}

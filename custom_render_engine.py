@@ -116,7 +116,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             # Loop over all datablocks used in the scene.
             for datablock in depsgraph.ids:
                 if isinstance(datablock, bpy.types.Object) and datablock.type == 'MESH':
-                    print(datablock.type, " ", datablock.name, flush=True)
+                    # print(datablock.type, " ", datablock.name, flush=True)
                     draw = MeshDraw(datablock.data)
                     draw.object = datablock
                     self.draw_calls[datablock.name] = draw
@@ -130,7 +130,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
                 datablock = update.id
                 if isinstance(datablock, bpy.types.Object) \
                 and datablock.type == 'MESH' and update.is_updated_geometry:
-                    print("mesh updated: ", datablock.name, flush=True)
+                    # print("mesh updated: ", datablock.name, flush=True)
                     # del self.draw_calls[datablock.name]
                     draw = MeshDraw(datablock.data)
                     draw.object = datablock
@@ -179,7 +179,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         if settings.world_color_clear:
             color = settings.world_color
             bgl.glClearColor(color[0], color[1], color[2], 1)
-            bgl.glClear(bgl.GL_COLOR_BUFFER_BIT | bgl.GL_DEPTH_BUFFER_BIT | bgl.GL_STENCIL_BUFFER_BIT)
+        bgl.glClear(bgl.GL_COLOR_BUFFER_BIT | bgl.GL_DEPTH_BUFFER_BIT | bgl.GL_STENCIL_BUFFER_BIT)
 
         # Bind (fragment) shader that converts from scene linear to display space,
         # self.bind_display_space_shader(scene)
@@ -213,7 +213,7 @@ class MeshDraw:
             use_split_normals = False
 
         vertices = np.empty((len(mesh.loops), 3), dtype=np.float32)
-        color = np.zeros((len(mesh.loops), 4), dtype=np.float32)
+        color = np.ones((len(mesh.loops), 4), dtype=np.float32)
         normals = np.empty((len(mesh.loops), 3), dtype=np.float32)
         uvs = np.zeros((len(mesh.loops), 2), dtype=np.float32)
         indices = np.empty((len(mesh.loop_triangles), 3), dtype=np.uintc)
@@ -263,20 +263,27 @@ class MeshDraw:
             packed_lights = mathutils.Matrix.Diagonal(mathutils.Vector((0, 0, 0, 0)))
             for i in range(min(len(lights), 4)):
                 packed_lights[i].xyz = lights[i]
+                packed_lights[i].w = 1
             self.shader.uniform_float("directional_lights", packed_lights.transposed())
             self.shader.uniform_bool("render_outlines", [settings.enable_outline])
             self.shader.uniform_float("outline_width", settings.outline_width)
+            self.shader.uniform_int("outline_scale_channel", CustomRenderEngineSettings.get_channel_index(settings.outline_scale_channel))
             self.shader.uniform_float("shading_sharpness", settings.shading_sharpness)
             self.shader.uniform_float("world_color", settings.world_color)
 
-            self.shader.uniform_bool("use_texture", [False])
             try:
                 basecolor = bpy.data.images[settings.basecolor_texture]
                 if basecolor and basecolor.gl_load() == 0:
-                    self.shader.uniform_bool("use_texture", [True])
                     bgl.glActiveTexture(bgl.GL_TEXTURE0)
                     bgl.glBindTexture(bgl.GL_TEXTURE_2D, basecolor.bindcode)
-                    self.shader.uniform_int("basecolor", 0)
+                    self.shader.uniform_int("tbasecolor", 0)
+                    self.shader.uniform_bool("use_tbasecolor", [True])
+                shadowtint = bpy.data.images[settings.shadowtint_texture]
+                if shadowtint and shadowtint.gl_load() == 0:
+                    bgl.glActiveTexture(bgl.GL_TEXTURE1)
+                    bgl.glBindTexture(bgl.GL_TEXTURE_2D, shadowtint.bindcode)
+                    self.shader.uniform_int("tshadowtint", 1)
+                    self.shader.uniform_bool("use_tshadowtint", [True])
             except KeyError:
                 pass
         except ValueError:
@@ -284,19 +291,40 @@ class MeshDraw:
         self.batch.draw(self.shader)
 
 class CustomRenderEngineSettings(bpy.types.PropertyGroup):
-    enable_outline: bpy.props.BoolProperty(name="Render Outlines", default=True)
-    outline_width: bpy.props.FloatProperty(name="Outline Width", default=1, min=0, soft_max=100)
-    shading_sharpness: bpy.props.FloatProperty(name="Shading Sharpness", default=1, subtype='FACTOR', min=0, max=1)
+    enable_outline: bpy.props.BoolProperty(name="Render Outlines", default=True, options=set())
+    outline_width: bpy.props.FloatProperty(name="Outline Width", default=1, min=0, soft_max=100, options=set())
+    shading_sharpness: bpy.props.FloatProperty(name="Shading Sharpness", default=1, subtype='FACTOR', min=0, max=1, options=set())
     
+    outline_scale_channel: bpy.props.EnumProperty(
+        items = [
+            ("R", "Red", ""),
+            ("G", "Green", ""),
+            ("B", "Blue", ""),
+            ("A", "Alpha", ""),
+            ("0", "None", "")
+        ],
+        name = "Outline Offset Scale Channel",
+        default = '0', options=set())
+        
     # TODO: Materials
-    basecolor_texture: bpy.props.StringProperty(name="BaseColor Texture")
+    basecolor_texture: bpy.props.StringProperty(name="Base Color")
+    shadowtint_texture: bpy.props.StringProperty(name="Shadow Tint")
 
-    world_color: bpy.props.FloatVectorProperty(name="World Color", size=4, default=(0.1, 0.1, 0.1, 1), subtype='COLOR', min=0, max=1)
-    world_color_clear: bpy.props.BoolProperty(name="World Color Clear", default=False)
+    world_color: bpy.props.FloatVectorProperty(name="World Color", size=4, default=(0.1, 0.1, 0.1, 1), subtype='COLOR', min=0, max=1, options=set())
+    world_color_clear: bpy.props.BoolProperty(name="World Color Clear", default=False, options=set())
+
+    def get_channel_index(c):
+        return {
+            'R': 0,
+            'G': 1,
+            'B': 2,
+            'A': 3,
+            "0": -1
+        }[c]
 
 class CustomRenderEnginePanel(bpy.types.Panel):
     bl_idname = "RENDER_PT_CustomRenderEngine"
-    bl_label = "AAAAAAAAAAAaaaaaaaaaaaa"
+    bl_label = "Custom Render Engine Settings"
     bl_space_type = "PROPERTIES"
     bl_region_type = "WINDOW"
     bl_context = "render"
@@ -308,13 +336,17 @@ class CustomRenderEnginePanel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        layout.use_property_decorate = True
+        layout.use_property_split = True
         settings = context.scene.custom_render_engine
         layout.prop(settings, "enable_outline")
         layout.prop(settings, "outline_width")
         layout.prop(settings, "shading_sharpness")
+        layout.prop(settings, "outline_scale_channel")
         layout.prop(settings, "world_color")
         layout.prop(settings, "world_color_clear")
         layout.prop_search(settings, "basecolor_texture", bpy.data, "images")
+        layout.prop_search(settings, "shadowtint_texture", bpy.data, "images")
 
 # RenderEngines also need to tell UI Panels that they are compatible with.
 # We recommend to enable all panels marked as BLENDER_RENDER, and then
