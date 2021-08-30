@@ -4,9 +4,11 @@ layout(triangle_strip, max_vertices = 6) out;
 
 in vec4 vertex_color[];
 in vec3 world_normal[];
+in vec2 texcoord[];
 
 out vec4 color;
 out vec3 normal;
+out vec2 uv;
 out float outline;
 
 //uniform mat4 perspective_matrix;
@@ -30,14 +32,17 @@ void main()
     gl_Position = perspective_matrix * gl_in[0].gl_Position;
     color = vertex_color[0];
     normal = world_normal[0];
+    uv = texcoord[0];
     EmitVertex();
     gl_Position = perspective_matrix * gl_in[1].gl_Position;
     color = vertex_color[1];
     normal = world_normal[1];
+    uv = texcoord[1];
     EmitVertex();
     gl_Position = perspective_matrix * gl_in[2].gl_Position;
     color = vertex_color[2];
     normal = world_normal[2];
+    uv = texcoord[2];
     EmitVertex();
     EndPrimitive();
 

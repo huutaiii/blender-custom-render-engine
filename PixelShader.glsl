@@ -1,10 +1,13 @@
 
 in vec4 color;
 in vec3 normal;
+in vec2 uv;
 in float outline;
 
 uniform mat4 directional_lights;
 uniform float shading_sharpness;
+uniform bool use_texture;
+uniform sampler2D basecolor;
 
 void main()
 {
@@ -14,7 +17,7 @@ void main()
     } 
     else
     {
-        vec3 base_color = vec3(1, 1, 1);
+        vec3 base_color = use_texture ? texture(basecolor, uv).xyz : vec3(1, 1, 1);
         gl_FragColor.xyz = base_color * 0.1;
         for (int i = 0; i <= 3; ++i)
         {

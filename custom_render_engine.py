@@ -213,6 +213,7 @@ class MeshDraw:
         vertices = np.empty((len(mesh.loops), 3), dtype=np.float32)
         color = np.zeros((len(mesh.loops), 4), dtype=np.float32)
         normals = np.empty((len(mesh.loops), 3), dtype=np.float32)
+        uvs = np.zeros((len(mesh.loops), 2), dtype=np.float32)
         indices = np.empty((len(mesh.loop_triangles), 3), dtype=np.uintc)
         
         merged_vertices = np.empty((len(mesh.vertices), 3), dtype=np.float32)
@@ -225,9 +226,11 @@ class MeshDraw:
             vertices[i] = merged_vertices[loop_vertices[i]]
         # print(time.time() - start_time)
         mesh.loop_triangles.foreach_get("loops", np.reshape(indices, len(mesh.loop_triangles) * 3))
-        mesh.loops.foreach_get("normal", np.reshape(normals, len(mesh.loops) * 3))
         if mesh.vertex_colors.active:
             mesh.vertex_colors.active.data.foreach_get("color", np.reshape(color, len(mesh.loops) * 4))
+        mesh.loops.foreach_get("normal", np.reshape(normals, len(mesh.loops) * 3))
+        if mesh.uv_layers.active:
+            mesh.uv_layers.active.data.foreach_get("uv", np.reshape(uvs, len(mesh.loops) * 2))
 
         # fmt = gpu.types.GPUVertFormat()
         # fmt.attr_add(id="position", comp_type='F32', len=3, fetch_mode="FLOAT")
@@ -240,7 +243,7 @@ class MeshDraw:
         # ibo = gpu.types.GPUIndexBuf(types="TRIS", seq=indices)
 
         self.shader = gpu.types.GPUShader(VERTEX_SHADER, PIXEL_SHADER, geocode=GEOMETRY_SHADER)
-        self.batch = batch_for_shader(self.shader, 'TRIS', {"position": vertices, "normal": normals, "color": color}, indices=indices)
+        self.batch = batch_for_shader(self.shader, 'TRIS', {"position": vertices, "normal": normals, "uv": uvs, "color": color}, indices=indices)
     
     def draw(self, transform, region_data, lights, settings):
         def min(a, b):
@@ -262,6 +265,17 @@ class MeshDraw:
             self.shader.uniform_bool("render_outlines", [settings.enable_outline])
             self.shader.uniform_float("outline_width", settings.outline_width)
             self.shader.uniform_float("shading_sharpness", settings.shading_sharpness)
+
+            self.shader.uniform_bool("use_texture", [False])
+            try:
+                basecolor = bpy.data.images[settings.basecolor_texture]
+                if basecolor and basecolor.gl_load() == 0:
+                    self.shader.uniform_bool("use_texture", [True])
+                    bgl.glActiveTexture(bgl.GL_TEXTURE0)
+                    bgl.glBindTexture(bgl.GL_TEXTURE_2D, basecolor.bindcode)
+                    self.shader.uniform_int("basecolor", 0)
+            except KeyError:
+                pass
         except ValueError:
             pass
         self.batch.draw(self.shader)
@@ -270,6 +284,9 @@ class CustomRenderEngineSettings(bpy.types.PropertyGroup):
     enable_outline: bpy.props.BoolProperty(name="Render Outlines", default=True)
     outline_width: bpy.props.FloatProperty(name="Outline Width", default=1, min=0, soft_max=100)
     shading_sharpness: bpy.props.FloatProperty(name="Shading Sharpness", default=1, subtype='FACTOR', min=0, max=1)
+    
+    # TODO: Materials
+    basecolor_texture: bpy.props.StringProperty(name="BaseColor Texture")
 
 class CustomRenderEnginePanel(bpy.types.Panel):
     bl_idname = "RENDER_PT_CustomRenderEngine"
@@ -289,6 +306,7 @@ class CustomRenderEnginePanel(bpy.types.Panel):
         layout.prop(settings, "enable_outline")
         layout.prop(settings, "outline_width")
         layout.prop(settings, "shading_sharpness")
+        layout.prop_search(settings, "basecolor_texture", bpy.data, "images")
 
 # RenderEngines also need to tell UI Panels that they are compatible with.
 # We recommend to enable all panels marked as BLENDER_RENDER, and then
