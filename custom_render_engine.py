@@ -174,17 +174,20 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         # Get viewport dimensions
         dimensions = region.width, region.height
 
-        # bgl.glClearColor(1, 0, 0, 1)
-        # bgl.glClear(bgl.GL_COLOR_BUFFER_BIT | bgl.GL_DEPTH_BUFFER_BIT | bgl.GL_STENCIL_BUFFER_BIT)
+        settings = context.scene.custom_render_engine
+
+        if settings.world_color_clear:
+            color = settings.world_color
+            bgl.glClearColor(color[0], color[1], color[2], 1)
+            bgl.glClear(bgl.GL_COLOR_BUFFER_BIT | bgl.GL_DEPTH_BUFFER_BIT | bgl.GL_STENCIL_BUFFER_BIT)
 
         # Bind (fragment) shader that converts from scene linear to display space,
         # self.bind_display_space_shader(scene)
-        # gpu.state.blend_set('ALPHA')
-        gpu.state.depth_mask_set(True)
-        gpu.state.depth_test_set('LESS_EQUAL')
-        gpu.state.face_culling_set('BACK')
+        
+        bgl.glEnable(bgl.GL_DEPTH_TEST)
+        bgl.glEnable(bgl.GL_CULL_FACE)
+        bgl.glCullFace(bgl.GL_BACK)
 
-        settings = context.scene.custom_render_engine
         for object in self.mesh_objects:
             draw = self.draw_calls[object.name]
             draw.draw(object.matrix_world, context.region_data, self.lights, settings)
@@ -194,10 +197,9 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             
 
         # self.unbind_display_space_shader()
-        # gpu.state.blend_set('NONE')
-        gpu.state.depth_test_set('NONE')
-        gpu.state.depth_mask_set(False)
-        gpu.state.face_culling_set('NONE')
+        
+        bgl.glDisable(bgl.GL_DEPTH_TEST)
+        bgl.glDisable(bgl.GL_CULL_FACE)
 
 class MeshDraw:
     def __init__(self, mesh, transform=None):
@@ -265,6 +267,7 @@ class MeshDraw:
             self.shader.uniform_bool("render_outlines", [settings.enable_outline])
             self.shader.uniform_float("outline_width", settings.outline_width)
             self.shader.uniform_float("shading_sharpness", settings.shading_sharpness)
+            self.shader.uniform_float("world_color", settings.world_color)
 
             self.shader.uniform_bool("use_texture", [False])
             try:
@@ -288,6 +291,9 @@ class CustomRenderEngineSettings(bpy.types.PropertyGroup):
     # TODO: Materials
     basecolor_texture: bpy.props.StringProperty(name="BaseColor Texture")
 
+    world_color: bpy.props.FloatVectorProperty(name="World Color", size=4, default=(0.1, 0.1, 0.1, 1), subtype='COLOR', min=0, max=1)
+    world_color_clear: bpy.props.BoolProperty(name="World Color Clear", default=False)
+
 class CustomRenderEnginePanel(bpy.types.Panel):
     bl_idname = "RENDER_PT_CustomRenderEngine"
     bl_label = "AAAAAAAAAAAaaaaaaaaaaaa"
@@ -306,6 +312,8 @@ class CustomRenderEnginePanel(bpy.types.Panel):
         layout.prop(settings, "enable_outline")
         layout.prop(settings, "outline_width")
         layout.prop(settings, "shading_sharpness")
+        layout.prop(settings, "world_color")
+        layout.prop(settings, "world_color_clear")
         layout.prop_search(settings, "basecolor_texture", bpy.data, "images")
 
 # RenderEngines also need to tell UI Panels that they are compatible with.
