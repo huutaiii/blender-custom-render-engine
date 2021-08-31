@@ -11,64 +11,61 @@ out vec3 normal;
 out vec2 uv;
 out float outline;
 
-//uniform mat4 perspective_matrix;
 uniform mat4 view_matrix;
 uniform mat4 projection_matrix;
 uniform bool render_outlines;
 uniform float outline_width;
+const float depth_scale_exponent = 0.75;
 uniform int outline_scale_channel;
-const float offset_scale = 0.001;
+const float offset_scale = 0.01;
 
-vec4 offset_vertex(vec4 position, vec3 normal, vec4 view_location, float vertex_offset_scale)
+mat4 perspective_matrix = projection_matrix * view_matrix;
+vec4 view_location = inverse(view_matrix) * vec4(0, 0, 0, 1);
+
+vec4 offset_vertex(vec4 position, vec3 normal, float vertex_offset_scale)
 {
-    float distance = length((position - view_location).xyz);
-    return position + vec4(normal * offset_scale * vertex_offset_scale * outline_width * distance, 0);
+    float view_distance = pow(distance(position.xyz, view_location.xyz), depth_scale_exponent);
+    return position + vec4(normal * offset_scale * vertex_offset_scale * outline_width * view_distance, 0);
+}
+
+void emit_original_vertex(int index)
+{
+    gl_Position = perspective_matrix * gl_in[index].gl_Position;
+    color = vertex_color[index];
+    normal = world_normal[index];
+    uv = texcoord[index];
+    EmitVertex();
 }
 
 void main()
 {
-    mat4 perspective_matrix = projection_matrix * view_matrix;
-
     outline = 0;
-    gl_Position = perspective_matrix * gl_in[0].gl_Position;
-    color = vertex_color[0];
-    normal = world_normal[0];
-    uv = texcoord[0];
-    EmitVertex();
-    gl_Position = perspective_matrix * gl_in[1].gl_Position;
-    color = vertex_color[1];
-    normal = world_normal[1];
-    uv = texcoord[1];
-    EmitVertex();
-    gl_Position = perspective_matrix * gl_in[2].gl_Position;
-    color = vertex_color[2];
-    normal = world_normal[2];
-    uv = texcoord[2];
-    EmitVertex();
+    emit_original_vertex(0);
+    emit_original_vertex(1);
+    emit_original_vertex(2);
     EndPrimitive();
 
     if (render_outlines)
     {
         outline = 1;
-        vec4 view_location = view_matrix[3];
         float offset_scale;
         if (outline_scale_channel >= 0)
         {
-            gl_Position = perspective_matrix * offset_vertex(gl_in[2].gl_Position, world_normal[2], view_location, vertex_color[2][outline_scale_channel]);
+            gl_Position = perspective_matrix * offset_vertex(gl_in[2].gl_Position, world_normal[2], vertex_color[2][outline_scale_channel]);
             EmitVertex();
-            gl_Position = perspective_matrix * offset_vertex(gl_in[1].gl_Position, world_normal[1], view_location, vertex_color[1][outline_scale_channel]);
+            gl_Position = perspective_matrix * offset_vertex(gl_in[1].gl_Position, world_normal[1], vertex_color[1][outline_scale_channel]);
             EmitVertex();
-            gl_Position = perspective_matrix * offset_vertex(gl_in[0].gl_Position, world_normal[0], view_location, vertex_color[0][outline_scale_channel]);
+            gl_Position = perspective_matrix * offset_vertex(gl_in[0].gl_Position, world_normal[0], vertex_color[0][outline_scale_channel]);
             EmitVertex();
             EndPrimitive();
         }
         else
         {
-            gl_Position = perspective_matrix * offset_vertex(gl_in[2].gl_Position, world_normal[2], view_location, 1);
+            gl_Position = perspective_matrix * offset_vertex(gl_in[2].gl_Position, world_normal[2], 1);
             EmitVertex();
-            gl_Position = perspective_matrix * offset_vertex(gl_in[1].gl_Position, world_normal[1], view_location, 1);
+            gl_Position = perspective_matrix * offset_vertex(gl_in[1].gl_Position, world_normal[1], 1);
             EmitVertex();
-            gl_Position = perspective_matrix * offset_vertex(gl_in[0].gl_Position, world_normal[0], view_location, 1);
+            gl_Position = perspective_matrix * offset_vertex(gl_in[0].gl_Position, world_normal[0], 1);
             EmitVertex();
             EndPrimitive();
         }

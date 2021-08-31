@@ -1,7 +1,7 @@
 
 in vec4 color;
 in vec3 normal;
-in vec4 world_position;
+in vec3 view;
 in vec2 uv;
 in float outline;
 
@@ -26,11 +26,11 @@ void main()
         gl_FragColor.xyz = base_color * world_color.xyz;
         for (int i = 0; i <= 3; ++i)
         {
-            if (directional_lights[i].w)
+            if (directional_lights[i].w > 0)
             {
                 vec3 light = directional_lights[i].xyz;
                 float nl = smoothstep(0, 1 - shading_sharpness, dot(normal, light));
-                gl_FragColor.xyz += mix(base_color * shadow_tint, base_color, nl);
+                gl_FragColor.xyz += mix(base_color * shadow_tint, base_color, nl) * mix(1, 0.5, shading_sharpness);
             }
         }
         gl_FragColor.a = 1;
