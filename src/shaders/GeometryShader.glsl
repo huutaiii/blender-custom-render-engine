@@ -6,9 +6,10 @@ in vec4 vertex_color[];
 in vec3 world_normal[];
 in vec2 texcoord[];
 
-out vec4 color;
 out vec3 normal;
+out vec4 color;
 out vec2 uv;
+out vec3 view;
 out float outline;
 
 uniform mat4 view_matrix;
@@ -31,9 +32,10 @@ vec4 offset_vertex(vec4 position, vec3 normal, float vertex_offset_scale)
 void emit_original_vertex(int index)
 {
     gl_Position = perspective_matrix * gl_in[index].gl_Position;
-    color = vertex_color[index];
     normal = world_normal[index];
+    color = vertex_color[index];
     uv = texcoord[index];
+    view = normalize((view_location - gl_in[index].gl_Position).xyz);
     EmitVertex();
 }
 

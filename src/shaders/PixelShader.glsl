@@ -23,7 +23,8 @@ void main()
     {
         vec3 base_color = use_tbasecolor ? texture(tbasecolor, uv).xyz : vec3(1, 1, 1);
         vec3 shadow_tint = use_tshadowtint ? texture(tshadowtint, uv).xyz : vec3(0, 0, 0);
-        gl_FragColor.xyz = base_color * world_color.xyz;
+        float fresnel = smoothstep(mix(0.33, 0.67, shading_sharpness), mix(1, 0.67, shading_sharpness), 1 - dot(normal, view)) * 0.5;
+        gl_FragColor.xyz = base_color * world_color.xyz * (1 + fresnel);
         for (int i = 0; i <= 3; ++i)
         {
             if (directional_lights[i].w > 0)
