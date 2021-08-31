@@ -2,17 +2,17 @@
 const GetAbsolutePath = (filename) => {
 	switch (process.platform) {
 		case 'win32':
-			return process.cwd() + '\\' + filename
+			return process.cwd() + '\\' + filename.replace('/', '\\')
 		case 'linux':
 			return process.cwd() + '/' + filename
 		default:
-			return ''
+			throw 'AAAAAAAAAAA'
 	}
 }
 const BLENDER_EXEC_WINDOWS = process.env.ProgramW6432 + "\\Blender Foundation\\Blender 2.93\\blender.exe"
 const BLENDER_EXEC_LINUX = "blender"
 const TEST_FILE	= GetAbsolutePath('test_file.blend')
-const SCRIPT = GetAbsolutePath('custom_render_engine.py')
+const SCRIPT = GetAbsolutePath('src/custom_render_engine.py')
 
 console.log("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 // blender = require('child_process').spawn("cmd.exe", ["/S", "/C", BLENDER_WINDOWS + " -p 0 0 800 800"])

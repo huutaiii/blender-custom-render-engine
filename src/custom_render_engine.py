@@ -4,16 +4,12 @@ Simple Render Engine
 """
 
 import bpy
-import array
-import gpu
-from gpu_extras.presets import draw_texture_2d
 import bgl
+import gpu
 from gpu_extras.batch import batch_for_shader
-import numpy as np
-from random import random
-import time
 import mathutils
-import bl_math
+import numpy as np
+import time
 import os
 
 bl_info = {
@@ -31,7 +27,7 @@ bl_info = {
     "category": "Render",
 }
 
-def get_script_directory():
+def get_path(file):
     delimiter = None
     if os.name == 'nt':
         delimiter = '\\'
@@ -41,12 +37,12 @@ def get_script_directory():
         raise RuntimeError("Platform not supported")
     names = __file__.split(delimiter)
     path = delimiter.join(names[:len(names)-1]) + delimiter
-    del delimiter
+    path += file.replace('/', delimiter)
     return path
 
-VERTEX_SHADER = open(get_script_directory() + "VertexShader.glsl").read()
-GEOMETRY_SHADER = open(get_script_directory() + "GeometryShader.glsl").read()
-PIXEL_SHADER = open(get_script_directory() + "PixelShader.glsl").read()
+VERTEX_SHADER = open(get_path("shaders/VertexShader.glsl")).read()
+GEOMETRY_SHADER = open(get_path("shaders/GeometryShader.glsl")).read()
+PIXEL_SHADER = open(get_path("shaders/PixelShader.glsl")).read()
 
 class CustomRenderEngine(bpy.types.RenderEngine):
     # These three members are used by blender to set up the
