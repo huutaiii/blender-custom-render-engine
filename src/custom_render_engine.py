@@ -66,6 +66,9 @@ class CustomRenderEngine(bpy.types.RenderEngine):
     def __del__(self):
         pass
 
+    def get_settings(self, context):
+        return context.scene.custom_render_engine
+
     # This is the method called by Blender for both final renders (F12) and
     # small preview for materials, world and lights.
     def render(self, depsgraph):
@@ -113,7 +116,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             for datablock in depsgraph.ids:
                 if isinstance(datablock, bpy.types.Object) and datablock.type == 'MESH':
                     # print(datablock.type, " ", datablock.name, flush=True)
-                    draw = MeshDraw(datablock.data)
+                    draw = MeshDraw(datablock.data, self.get_settings(context))
                     draw.object = datablock
                     self.draw_calls[datablock.name] = draw
                 pass
@@ -128,7 +131,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
                 and datablock.type == 'MESH' and update.is_updated_geometry:
                     # print("mesh updated: ", datablock.name, flush=True)
                     # del self.draw_calls[datablock.name]
-                    draw = MeshDraw(datablock.data)
+                    draw = MeshDraw(datablock.data, self.get_settings(context))
                     draw.object = datablock
                     self.draw_calls[datablock.name] = draw
 
@@ -170,7 +173,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         # Get viewport dimensions
         dimensions = region.width, region.height
 
-        settings = context.scene.custom_render_engine
+        settings = self.get_settings(context)
 
         if settings.world_color_clear:
             color = settings.world_color
@@ -198,19 +201,19 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         bgl.glDisable(bgl.GL_CULL_FACE)
 
 class MeshDraw:
-    def __init__(self, mesh, transform=None):
+    def __init__(self, mesh, settings):
         # print("AAAAAAAAAAAAAAA", mesh, flush=True)
-        self.transform = transform
         mesh.calc_loop_triangles()
-        use_split_normals = True
         try:
             mesh.calc_tangents()
-        except RuntimeError:
-            use_split_normals = False
+        except:
+            pass
 
         vertices = np.empty((len(mesh.loops), 3), dtype=np.float32)
         color = np.ones((len(mesh.loops), 4), dtype=np.float32)
         normals = np.empty((len(mesh.loops), 3), dtype=np.float32)
+        tangents = np.empty((len(mesh.loops), 3), dtype=np.float32)
+        bitangent_signs = np.empty(len(mesh.loops), dtype=np.float32)
         uvs = np.zeros((len(mesh.loops), 2), dtype=np.float32)
         indices = np.empty((len(mesh.loop_triangles), 3), dtype=np.uintc)
         
@@ -218,17 +221,19 @@ class MeshDraw:
         mesh.vertices.foreach_get("co", np.reshape(merged_vertices, len(mesh.vertices) * 3))
         loop_vertices = np.empty(len(mesh.loops), dtype=np.int)
         mesh.loops.foreach_get("vertex_index", loop_vertices)
-        start_time = time.time()
+        # start_time = time.time()
         # this is not fast enough ?
         for i in range(len(mesh.loops)):
             vertices[i] = merged_vertices[loop_vertices[i]]
         # print(time.time() - start_time)
-        mesh.loop_triangles.foreach_get("loops", np.reshape(indices, len(mesh.loop_triangles) * 3))
-        if mesh.vertex_colors.active:
-            mesh.vertex_colors.active.data.foreach_get("color", np.reshape(color, len(mesh.loops) * 4))
         mesh.loops.foreach_get("normal", np.reshape(normals, len(mesh.loops) * 3))
+        mesh.loops.foreach_get("tangent", np.reshape(tangents, len(mesh.loops) * 3))
+        mesh.loops.foreach_get("bitangent_sign", bitangent_signs)
         if mesh.uv_layers.active:
             mesh.uv_layers.active.data.foreach_get("uv", np.reshape(uvs, len(mesh.loops) * 2))
+        if mesh.vertex_colors.active:
+            mesh.vertex_colors.active.data.foreach_get("color", np.reshape(color, len(mesh.loops) * 4))
+        mesh.loop_triangles.foreach_get("loops", np.reshape(indices, len(mesh.loop_triangles) * 3))
 
         # fmt = gpu.types.GPUVertFormat()
         # fmt.attr_add(id="position", comp_type='F32', len=3, fetch_mode="FLOAT")
@@ -241,7 +246,7 @@ class MeshDraw:
         # ibo = gpu.types.GPUIndexBuf(types="TRIS", seq=indices)
 
         self.shader = gpu.types.GPUShader(VERTEX_SHADER, PIXEL_SHADER, geocode=GEOMETRY_SHADER)
-        self.batch = batch_for_shader(self.shader, 'TRIS', {"position": vertices, "normal": normals, "uv": uvs, "color": color}, indices=indices)
+        self.batch = batch_for_shader(self.shader, 'TRIS', {"position": vertices, "normal": normals, "tangent": tangents, "bitangent_sign": bitangent_signs, "uv": uvs, "color": color}, indices=indices)
     
     def draw(self, transform, region_data, lights, settings):
         def min(a, b):
@@ -262,10 +267,12 @@ class MeshDraw:
                 packed_lights[i].w = 1
             self.shader.uniform_float("directional_lights", packed_lights.transposed())
             self.shader.uniform_bool("render_outlines", [settings.enable_outline])
-            self.shader.uniform_float("outline_width", settings.outline_width)
-            self.shader.uniform_int("outline_scale_channel", CustomRenderEngineSettings.get_channel_index(settings.outline_scale_channel))
             self.shader.uniform_float("shading_sharpness", settings.shading_sharpness)
             self.shader.uniform_float("world_color", settings.world_color)
+
+            self.shader.uniform_float("outline_width", settings.outline_width)
+            self.shader.uniform_bool("use_vertexcolor_alpha", [settings.use_vertexcolor_alpha])
+            self.shader.uniform_bool("use_vertexcolor_rgb", [settings.use_vertexcolor_rgb])
 
             try:
                 basecolor = bpy.data.images[settings.basecolor_texture]
@@ -290,17 +297,8 @@ class CustomRenderEngineSettings(bpy.types.PropertyGroup):
     enable_outline: bpy.props.BoolProperty(name="Render Outlines", default=True, options=set())
     outline_width: bpy.props.FloatProperty(name="Outline Width", default=1, min=0, soft_max=100, options=set())
     shading_sharpness: bpy.props.FloatProperty(name="Shading Sharpness", default=1, subtype='FACTOR', min=0, max=1, options=set())
-    
-    outline_scale_channel: bpy.props.EnumProperty(
-        items = [
-            ("R", "Red", ""),
-            ("G", "Green", ""),
-            ("B", "Blue", ""),
-            ("A", "Alpha", ""),
-            ("0", "None", "")
-        ],
-        name = "Outline Offset Scale Channel",
-        default = '0', options=set())
+    use_vertexcolor_alpha: bpy.props.BoolProperty(name="Use Vertex Color Alpha", default=False, options=set())
+    use_vertexcolor_rgb: bpy.props.BoolProperty(name="Use Vertex Color RGB", default=False, options=set())
         
     # TODO: Materials
     basecolor_texture: bpy.props.StringProperty(name="Base Color")
@@ -338,7 +336,8 @@ class CustomRenderEnginePanel(bpy.types.Panel):
         layout.prop(settings, "enable_outline")
         layout.prop(settings, "outline_width")
         layout.prop(settings, "shading_sharpness")
-        layout.prop(settings, "outline_scale_channel")
+        layout.prop(settings, "use_vertexcolor_alpha")
+        layout.prop(settings, "use_vertexcolor_rgb")
         layout.prop(settings, "world_color")
         layout.prop(settings, "world_color_clear")
         layout.prop_search(settings, "basecolor_texture", bpy.data, "images")

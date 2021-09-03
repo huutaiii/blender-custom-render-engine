@@ -1,6 +1,7 @@
 
 in vec4 color;
 in vec3 normal;
+in vec3 tangent;
 in vec3 view;
 in vec2 uv;
 in float outline;
