@@ -3,29 +3,8 @@ Simple Render Engine
 ++++++++++++++++++++
 """
 
-import bpy
-import bgl
-import gpu
-from gpu_extras.batch import batch_for_shader
-import mathutils
-import numpy as np
-import time
 import os
-
-bl_info = {
-    "name": "Custom Render Engine",
-    # "description": "Single line explaining what this script exactly does.",
-    "author": "huutai",
-    "version": (0, 1),
-    "blender": (2, 90, 0),
-    # "location": "View3D > Add > Mesh",
-    # "warning": "", # used for warning icon and text in addons panel
-    # "doc_url": "http://wiki.blender.org/index.php/Extensions:2.6/Py/"
-    #             "Scripts/My_Script",
-    # "tracker_url": "https://developer.blender.org/maniphest/task/edit/form/2/",
-    # "support": "COMMUNITY",
-    "category": "Render",
-}
+import sys
 
 def get_path(file):
     delimiter = None
@@ -39,6 +18,27 @@ def get_path(file):
     path = delimiter.join(names[:len(names)-1]) + delimiter
     path += file.replace('/', delimiter)
     return path
+
+sys.path.append(get_path(""))
+
+import operators
+
+import bpy
+import bgl
+import gpu
+from gpu_extras.batch import batch_for_shader
+import mathutils
+import numpy as np
+import time
+
+bl_info = {
+    "name": "Custom Render Engine",
+    # "description": "Single line explaining what this script exactly does.",
+    "author": "huutai",
+    "version": (0, 1),
+    "blender": (2, 90, 0),
+    "category": "Render",
+}
 
 VERTEX_SHADER = open(get_path("shaders/VertexShader.glsl")).read()
 GEOMETRY_SHADER = open(get_path("shaders/GeometryShader.glsl")).read()
@@ -174,6 +174,10 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         dimensions = region.width, region.height
 
         settings = self.get_settings(context)
+
+        # buffer = bgl.Buffer(bgl.GL_INT, 1)
+        # bgl.glGetIntegerv(bgl.GL_DRAW_FRAMEBUFFER, buffer)
+        # print(buffer, flush=True)
 
         if settings.world_color_clear:
             color = settings.world_color
@@ -369,22 +373,26 @@ classes = [
 
 def register():
     # Register the RenderEngine
-    for cls in classes:
-        bpy.utils.register_class(cls)
+    for c in classes:
+        bpy.utils.register_class(c)
 
     for panel in get_panels():
         panel.COMPAT_ENGINES.add('CUSTOM')
 
     bpy.types.Scene.custom_render_engine = bpy.props.PointerProperty(type=CustomRenderEngineSettings)
 
+    operators.register()
+
 
 def unregister():
-    for cls in classes:
-        bpy.utils.unregister_class(cls)
+    for c in classes:
+        bpy.utils.unregister_class(c)
 
     for panel in get_panels():
         if 'CUSTOM' in panel.COMPAT_ENGINES:
             panel.COMPAT_ENGINES.remove('CUSTOM')
+
+    operators.unregister()
 
 
 if __name__ == "__main__":
