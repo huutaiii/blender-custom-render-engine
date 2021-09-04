@@ -22,7 +22,7 @@ uniform bool render_outlines;
 uniform float outline_width;
 uniform bool use_vertexcolor_alpha;
 uniform bool use_vertexcolor_rgb;
-const float depth_scale_exponent = 0.75;
+uniform float depth_scale_exponent;
 
 const float OFFSET_SCALE = 0.01;
 

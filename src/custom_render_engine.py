@@ -272,9 +272,11 @@ class MeshDraw:
             self.shader.uniform_float("directional_lights", packed_lights.transposed())
             self.shader.uniform_bool("render_outlines", [settings.enable_outline])
             self.shader.uniform_float("shading_sharpness", settings.shading_sharpness)
+            self.shader.uniform_float("fresnel_fac", settings.fresnel_fac)
             self.shader.uniform_float("world_color", settings.world_color)
 
             self.shader.uniform_float("outline_width", settings.outline_width)
+            self.shader.uniform_float("depth_scale_exponent", settings.outline_depth_exponent)
             self.shader.uniform_bool("use_vertexcolor_alpha", [settings.use_vertexcolor_alpha])
             self.shader.uniform_bool("use_vertexcolor_rgb", [settings.use_vertexcolor_rgb])
 
@@ -299,8 +301,10 @@ class MeshDraw:
 
 class CustomRenderEngineSettings(bpy.types.PropertyGroup):
     enable_outline: bpy.props.BoolProperty(name="Render Outlines", default=True, options=set())
-    outline_width: bpy.props.FloatProperty(name="Outline Width", default=1, min=0, soft_max=100, options=set())
+    outline_width: bpy.props.FloatProperty(name="Outline Width", default=1, min=0, soft_max=10, options=set())
+    outline_depth_exponent: bpy.props.FloatProperty(name="Outline Depth Scale Exponent", default=0.75, min=0, max=1, options=set())
     shading_sharpness: bpy.props.FloatProperty(name="Shading Sharpness", default=1, subtype='FACTOR', min=0, max=1, options=set())
+    fresnel_fac: bpy.props.FloatProperty(name="Fresnel Factor", default=0.5, min=0, max=1)
     use_vertexcolor_alpha: bpy.props.BoolProperty(name="Use Vertex Color Alpha", default=False, options=set())
     use_vertexcolor_rgb: bpy.props.BoolProperty(name="Use Vertex Color RGB", default=False, options=set())
         
@@ -339,13 +343,15 @@ class CustomRenderEnginePanel(bpy.types.Panel):
         settings = context.scene.custom_render_engine
         layout.prop(settings, "enable_outline")
         layout.prop(settings, "outline_width")
-        layout.prop(settings, "shading_sharpness")
+        layout.prop(settings, "outline_depth_exponent")
         layout.prop(settings, "use_vertexcolor_alpha")
         layout.prop(settings, "use_vertexcolor_rgb")
-        layout.prop(settings, "world_color")
-        layout.prop(settings, "world_color_clear")
         layout.prop_search(settings, "basecolor_texture", bpy.data, "images")
         layout.prop_search(settings, "shadowtint_texture", bpy.data, "images")
+        layout.prop(settings, "world_color")
+        layout.prop(settings, "world_color_clear")
+        layout.prop(settings, "shading_sharpness")
+        layout.prop(settings, "fresnel_fac")
 
 # RenderEngines also need to tell UI Panels that they are compatible with.
 # We recommend to enable all panels marked as BLENDER_RENDER, and then
