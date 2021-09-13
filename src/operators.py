@@ -14,6 +14,7 @@ def bake_vertex_normals(object, write_z):
     mesh.loops.foreach_get("tangent", np.reshape(tangents, len(mesh.loops) * 3))
     bitangents = np.empty((len(mesh.loops), 3), dtype=np.float32)
     mesh.loops.foreach_get("bitangent", np.reshape(bitangents, len(mesh.loops) * 3))
+    bitangents = np.negative(bitangents)
     
 #    vertex_group = object.vertex_groups.active
     

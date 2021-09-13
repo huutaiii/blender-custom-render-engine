@@ -233,6 +233,7 @@ class MeshDraw:
         mesh.loops.foreach_get("normal", np.reshape(normals, len(mesh.loops) * 3))
         mesh.loops.foreach_get("tangent", np.reshape(tangents, len(mesh.loops) * 3))
         mesh.loops.foreach_get("bitangent_sign", bitangent_signs)
+        bitangent_signs = np.negative(bitangent_signs)
         if mesh.uv_layers.active:
             mesh.uv_layers.active.data.foreach_get("uv", np.reshape(uvs, len(mesh.loops) * 2))
         if mesh.vertex_colors.active:
