@@ -105,7 +105,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
 
         # Get viewport dimensions
         dimensions = region.width, region.height
-        
+
         if not self.scene_data:
             # First time initialization
             print("AAAAAAAAAAAAAAAAAAAAAAAAAAaaa", flush=True)
@@ -160,7 +160,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
                         light_direction.rotate(object.matrix_world.decompose()[1])
                         self.lights.append(light_direction)
 
-            
+
     # For viewport renders, this method is called whenever Blender redraws
     # the 3D viewport. The renderer is expected to quickly draw the render
     # with OpenGL, and not perform other expensive work.
@@ -186,7 +186,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
 
         # Bind (fragment) shader that converts from scene linear to display space,
         # self.bind_display_space_shader(scene)
-        
+
         bgl.glEnable(bgl.GL_DEPTH_TEST)
         bgl.glEnable(bgl.GL_CULL_FACE)
         bgl.glCullFace(bgl.GL_BACK)
@@ -197,10 +197,10 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         # for key, draw in self.draw_calls.items():
         #     print(draw.object.name, " ", draw.object.hide_viewport, flush=True)
         #     draw.draw(draw.object.matrix_world, context.region_data, self.lights, settings)
-            
+
 
         # self.unbind_display_space_shader()
-        
+
         bgl.glDisable(bgl.GL_DEPTH_TEST)
         bgl.glDisable(bgl.GL_CULL_FACE)
 
@@ -214,22 +214,19 @@ class MeshDraw:
             pass
 
         vertices = np.empty((len(mesh.loops), 3), dtype=np.float32)
-        color = np.ones((len(mesh.loops), 4), dtype=np.float32)
+        color = np.full((len(mesh.loops), 4), [0.5, 0.5, 1, 1], dtype=np.float32)
         normals = np.empty((len(mesh.loops), 3), dtype=np.float32)
         tangents = np.empty((len(mesh.loops), 3), dtype=np.float32)
-        bitangent_signs = np.empty(len(mesh.loops), dtype=np.float32)
+        bitangent_signs = np.empty(len(mesh.loops), dtype=np.half)
         uvs = np.zeros((len(mesh.loops), 2), dtype=np.float32)
         indices = np.empty((len(mesh.loop_triangles), 3), dtype=np.uintc)
-        
-        merged_vertices = np.empty((len(mesh.vertices), 3), dtype=np.float32)
-        mesh.vertices.foreach_get("co", np.reshape(merged_vertices, len(mesh.vertices) * 3))
+
+        coords = np.empty((len(mesh.vertices), 3), dtype=np.float32)
+        mesh.vertices.foreach_get("co", np.reshape(coords, len(mesh.vertices) * 3))
         loop_vertices = np.empty(len(mesh.loops), dtype=np.int)
         mesh.loops.foreach_get("vertex_index", loop_vertices)
-        # start_time = time.time()
-        # this is not fast enough ?
-        for i in range(len(mesh.loops)):
-            vertices[i] = merged_vertices[loop_vertices[i]]
-        # print(time.time() - start_time)
+        vertices = coords[loop_vertices]
+
         mesh.loops.foreach_get("normal", np.reshape(normals, len(mesh.loops) * 3))
         mesh.loops.foreach_get("tangent", np.reshape(tangents, len(mesh.loops) * 3))
         mesh.loops.foreach_get("bitangent_sign", bitangent_signs)
@@ -238,6 +235,7 @@ class MeshDraw:
             mesh.uv_layers.active.data.foreach_get("uv", np.reshape(uvs, len(mesh.loops) * 2))
         if mesh.vertex_colors.active:
             mesh.vertex_colors.active.data.foreach_get("color", np.reshape(color, len(mesh.loops) * 4))
+
         mesh.loop_triangles.foreach_get("loops", np.reshape(indices, len(mesh.loop_triangles) * 3))
 
         # fmt = gpu.types.GPUVertFormat()
@@ -252,7 +250,7 @@ class MeshDraw:
 
         self.shader = gpu.types.GPUShader(VERTEX_SHADER, PIXEL_SHADER, geocode=GEOMETRY_SHADER)
         self.batch = batch_for_shader(self.shader, 'TRIS', {"position": vertices, "normal": normals, "tangent": tangents, "bitangent_sign": bitangent_signs, "uv": uvs, "color": color}, indices=indices)
-    
+
     def draw(self, transform, region_data, lights, settings):
         def min(a, b):
             if a > b:
@@ -308,7 +306,7 @@ class CustomRenderEngineSettings(bpy.types.PropertyGroup):
     fresnel_fac: bpy.props.FloatProperty(name="Fresnel Factor", default=0.5, min=0, max=1)
     use_vertexcolor_alpha: bpy.props.BoolProperty(name="Use Vertex Color Alpha", default=False, options=set())
     use_vertexcolor_rgb: bpy.props.BoolProperty(name="Use Vertex Color RGB", default=False, options=set())
-        
+
     # TODO: Materials
     basecolor_texture: bpy.props.StringProperty(name="Base Color")
     shadowtint_texture: bpy.props.StringProperty(name="Shadow Tint")
