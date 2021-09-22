@@ -13,12 +13,5 @@
 			],
 			"type": "pwa-node"
 		},
-		// {
-		// 	"name": "PowerShell Launch Script",
-		// 	"type": "PowerShell",
-		// 	"request": "launch",
-		// 	"script": "${workspaceFolder}/launch_blender.ps1",
-		// 	"cwd": "${workspaceFolder}"
-		// }
 	]
 }

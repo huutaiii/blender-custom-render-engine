@@ -9,6 +9,9 @@
 			"windows": {
 				"command": "${workspaceFolder}\\make_zip.ps1"
 			},
+			"linux": {
+				"command": "${workspaceFolder}/make_zip.sh"
+			},
 			"problemMatcher": [],
 			"group": {
 				"kind": "build",
