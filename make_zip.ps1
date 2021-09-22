@@ -1,4 +1,5 @@
 
+Write-Host "Writing files"
 New-Item -ItemType Directory .\custom_render_engine -Force >$null
 New-Item -ItemType Directory .\custom_render_engine\shaders -Force >$null
 
@@ -9,4 +10,7 @@ foreach ($file in ("VertexShader.glsl", "GeometryShader.glsl", "PixelShader.glsl
     Copy-Item -Path .\src\shaders\$file -Destination .\custom_render_engine\shaders\$file
 }
 
+Write-Host "Creating archive"
 Compress-Archive -Path .\custom_render_engine -DestinationPath .\custom_render_engine.zip -Force
+
+Write-Host "Done"

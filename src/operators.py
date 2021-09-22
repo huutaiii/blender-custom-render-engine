@@ -5,7 +5,7 @@ import mathutils
 import bl_math
 
 # Maps calculated normals into vertex color when using custom split normals
-def bake_vertex_normals(object, write_z):
+def bake_vertex_normals(object, write_z, merge_axis, merge_threshold):
     mesh = object.data
     mesh.calc_tangents()
     normals = np.empty((len(mesh.loops), 3), dtype=np.float32)
@@ -16,19 +16,20 @@ def bake_vertex_normals(object, write_z):
     mesh.loops.foreach_get("bitangent", np.reshape(bitangents, len(mesh.loops) * 3))
     bitangents = np.negative(bitangents)
     
-#    vertex_group = object.vertex_groups.active
-    
     vertex_normals = np.copy(normals)
     for i in range(len(mesh.loops)):
         vertex_index = mesh.loops[i].vertex_index
-        normal = mesh.vertices[vertex_index].normal
-        # try:
-        #     normal = mathutils.Vector(normal)
-        #     if mesh.vertices[vertex_index].co.x < 0.0001:
-        #         normal.x = 0
-        #     normal.normalize()
-        # except:
-        #     pass
+        normal = mathutils.Vector(mesh.vertices[vertex_index].normal)
+        if merge_axis == "X":
+            if abs(mesh.vertices[vertex_index].co.x) < merge_threshold:
+                normal.x = 0
+        if merge_axis == "Y":
+            if abs(mesh.vertices[vertex_index].co.y) < merge_threshold:
+                normal.y = 0
+        if merge_axis == "Z":
+            if abs(mesh.vertices[vertex_index].co.z) < merge_threshold:
+                normal.z = 0
+        normal.normalize()
         vertex_normals[i] = normal
     
     vertex_colors = mesh.vertex_colors.active.data
@@ -51,8 +52,15 @@ class OBJECT_OT_bake_vertex_normals(bpy.types.Operator):
     # bl_description = ""
     bl_options = {"REGISTER", "UNDO"}
 
-    write_z_component: bpy.props.BoolProperty(name="Write Z Component", default=False)
-    mirror_axis: bpy.props.EnumProperty
+    write_z_component: bpy.props.BoolProperty(name="Write Z Component")
+    merge_axis: bpy.props.EnumProperty(name = "Merge Axis",
+        items = [
+            ("NONE", "None", "", 0),
+            ("X", "X", "", 1),
+            ("Y", "Y", "", 2),
+            ("Z", "Z", "", 3)
+        ])
+    merge_threshold: bpy.props.FloatProperty(name="Merge Threshold", default=0.001, subtype='DISTANCE', min=0)
 
     @classmethod
     def poll(self, context):
@@ -66,7 +74,7 @@ class OBJECT_OT_bake_vertex_normals(bpy.types.Operator):
 
     def execute(self, context):
         for object in context.selected_objects:
-            bake_vertex_normals(object, self.write_z_component)
+            bake_vertex_normals(object, self.write_z_component, self.merge_axis, self.merge_threshold)
         return {"FINISHED"}
 
 def draw_menu(self, context):
