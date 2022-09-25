@@ -159,7 +159,9 @@ class CustomRenderEngine(bpy.types.RenderEngine):
                         # print("light: ", object.name)
                         light_direction = mathutils.Vector((0, 0, 1))
                         light_direction.rotate(object.matrix_world.decompose()[1])
-                        self.lights.append(light_direction)
+                        light = light_direction.to_4d()
+                        light.w = object.data.energy
+                        self.lights.append(light)
 
 
     # For viewport renders, this method is called whenever Blender redraws
@@ -267,8 +269,8 @@ class MeshDraw:
             self.shader.uniform_float("projection_matrix", region_data.window_matrix)
             packed_lights = mathutils.Matrix.Diagonal(mathutils.Vector((0, 0, 0, 0)))
             for i in range(min(len(lights), 4)):
-                packed_lights[i].xyz = lights[i]
-                packed_lights[i].w = 1
+                packed_lights[i].xyz = lights[i].xyz # direction
+                packed_lights[i].w = lights[i].w # strength
             self.shader.uniform_float("directional_lights", packed_lights.transposed())
             self.shader.uniform_bool("render_outlines", [settings.enable_outline])
             self.shader.uniform_float("shading_sharpness", settings.shading_sharpness)
@@ -353,6 +355,28 @@ class CustomRenderEnginePanel(bpy.types.Panel):
         layout.prop(settings, "shading_sharpness")
         layout.prop(settings, "fresnel_fac")
 
+# expose light properties
+class CustomRenderEngineLightPanel(bpy.types.Panel):
+    # bl_idname = "RENDER_PT_CustomRenderEngineLight"
+    bl_label = "Light"
+    bl_context = "data"
+    bl_space_type = "PROPERTIES"
+    bl_region_type = "WINDOW"
+
+    @classmethod
+    def poll(cls, context):
+        return context.engine == "CUSTOM"
+    
+    def draw(self, context):
+        # layout = self.layout
+        light = context.light
+        col = self.layout.column()
+        col.prop(light, "energy")
+
+        if (light.type == "SUN"):
+            col.prop(light, "angle")
+
+
 # RenderEngines also need to tell UI Panels that they are compatible with.
 # We recommend to enable all panels marked as BLENDER_RENDER, and then
 # exclude any panels that are replaced by custom panels registered by the
@@ -374,7 +398,8 @@ def get_panels():
 classes = [
     CustomRenderEngine,
     CustomRenderEngineSettings,
-    CustomRenderEnginePanel
+    CustomRenderEnginePanel,
+    CustomRenderEngineLightPanel
 ]
 
 def register():
