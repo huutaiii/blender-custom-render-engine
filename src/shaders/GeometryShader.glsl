@@ -1,3 +1,4 @@
+// #version 430
 
 layout(triangles) in;
 layout(triangle_strip, max_vertices = 6) out;
@@ -10,7 +11,7 @@ in vec2 texcoord[];
 
 out vec3 normal;
 out vec3 tangent;
-out vec4 color;
+out vec4 vcolor;
 out vec2 uv;
 out vec3 view;
 out float outline;
@@ -51,7 +52,7 @@ void emit_original_vertex(int index)
     gl_Position = perspective_matrix * gl_in[index].gl_Position;
     normal = world_normal[index];
     tangent = world_tangent[index];
-    color = vertex_color[index];
+    vcolor = vertex_color[index];
     uv = texcoord[index];
     view = normalize((view_location - gl_in[index].gl_Position).xyz);
     EmitVertex();

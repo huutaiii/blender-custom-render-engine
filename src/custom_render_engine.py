@@ -4,6 +4,7 @@ Simple Render Engine
 """
 
 import os
+from pydoc import describe
 import sys
 
 def get_path(file):
@@ -36,7 +37,7 @@ bl_info = {
     # "description": "Single line explaining what this script exactly does.",
     "author": "huutai",
     "version": (0, 1),
-    "blender": (2, 90, 0),
+    "blender": (3, 3, 0),
     "category": "Render",
 }
 
@@ -108,7 +109,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
 
         if not self.scene_data:
             # First time initialization
-            print("AAAAAAAAAAAAAAAAAAAAAAAAAAaaa", flush=True)
+            print("Initializing renderer", flush=True)
             self.scene_data = [0]
             first_time = True
 
@@ -304,8 +305,8 @@ class CustomRenderEngineSettings(bpy.types.PropertyGroup):
     outline_depth_exponent: bpy.props.FloatProperty(name="Outline Depth Scale Exponent", default=0.75, min=0, max=1, options=set())
     shading_sharpness: bpy.props.FloatProperty(name="Shading Sharpness", default=1, subtype='FACTOR', min=0, max=1, options=set())
     fresnel_fac: bpy.props.FloatProperty(name="Fresnel Factor", default=0.5, min=0, max=1)
-    use_vertexcolor_alpha: bpy.props.BoolProperty(name="Use Vertex Color Alpha", default=False, options=set())
-    use_vertexcolor_rgb: bpy.props.BoolProperty(name="Use Vertex Color RGB", default=False, options=set())
+    use_vertexcolor_alpha: bpy.props.BoolProperty(name="Use Vertex Color Alpha", default=False, options=set(), description="Used as offset scaling")
+    use_vertexcolor_rgb: bpy.props.BoolProperty(name="Use Vertex Color RGB", default=False, options=set(), description="Used as normal map for outline")
 
     # TODO: Materials
     basecolor_texture: bpy.props.StringProperty(name="Base Color")
