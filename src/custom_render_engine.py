@@ -44,6 +44,63 @@ VERTEX_SHADER = open(get_path("shaders/VertexShader.glsl")).read()
 GEOMETRY_SHADER = open(get_path("shaders/GeometryShader.glsl")).read()
 PIXEL_SHADER = open(get_path("shaders/PixelShader.glsl")).read()
 
+VERTEX_2D = """
+    in vec2 pos;
+    out vec2 uv;
+
+    void main()
+    {
+        uv = pos;
+        gl_Position = vec4(pos * 2 - 1, 0, 1);
+    }
+"""
+
+PIXEL_2D = """
+    uniform sampler2D image;
+    in vec2 uv;
+    out vec4 color;
+
+    void main()
+    {
+        color = texture(image, uv);
+    }
+"""
+
+PIXEL_AVG = """
+    uniform sampler2D image;
+    uniform ivec2 view_size;
+    uniform ivec2 buffer_size;
+
+    in vec2 uv;
+
+    out vec4 color;
+
+    void main()
+    {
+        vec4 tex = texture(image, uv);
+        if (length(view_size) < length(buffer_size))
+        {
+            int count = 0;
+            vec4 acc = vec4(0);
+            ivec2 scale = view_size / buffer_size;
+            ivec2 ipos = ivec2(round(uv * buffer_size));
+            ivec2 end = ipos + scale;
+            for (; ipos.x <= end.x; ++ipos.x)
+            {
+                for (; ipos.y <= end.y; ++ipos.y)
+                {
+                    vec4 texel = texelFetch(image, ipos, 0);
+                    acc += texel;
+                    ++count;
+                }
+            }
+            acc /= count;
+            tex = acc;
+        }
+        color = tex;
+    }
+"""
+
 class CustomRenderEngine(bpy.types.RenderEngine):
     # These three members are used by blender to set up the
     # RenderEngine; define its internal name, visible name and capabilities.
@@ -183,9 +240,13 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         x, y, w, h = gpu.state.viewport_get()
 
         offscr_scale = settings.backbuffer_scale
-        offscr = gpu.types.GPUOffScreen(math.floor(w * offscr_scale), math.floor(h * offscr_scale))
+        # if offscr_scale > 1:
+        #     offscr_scale = math.floor(offscr_scale)
+        rgb = gpu.types.GPUTexture((math.floor(w * offscr_scale), math.floor(h * offscr_scale)), format="RGBA16")
+        z = gpu.types.GPUTexture((math.floor(w * offscr_scale), math.floor(h * offscr_scale)), format="DEPTH_COMPONENT24")
+        rb = gpu.types.GPUFrameBuffer(depth_slot=z, color_slots=(rgb))
 
-        with offscr.bind():
+        with rb.bind():
 
             if settings.world_color_clear:
                 color = settings.world_color
@@ -211,19 +272,21 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             # self.unbind_display_space_shader()
 
         with fb.bind():
-            gpu.state.depth_test_set("ALWAYS")
-            gpu.state.depth_mask_set(False)
+            gpu.state.depth_test_set("LESS")
+            gpu.state.depth_mask_set(True)
             gpu.state.face_culling_set("NONE")
             
-            # draw_texture_2d(offscr.texture_color, (x, y), w, h)
-            shader = gpu.shader.from_builtin("2D_IMAGE")
-            batch = batch_for_shader(shader, "TRI_FAN", {"pos": ((x, y), (w, y), (w, h), (x, h)), "texCoord": ((0, 0), (1, 0), (1, 1), (0, 1))})
+            coords = ((0, 0), (1, 0), (1, 1), (0, 1))
+            shader = gpu.types.GPUShader(VERTEX_2D, PIXEL_2D)
+            vbo = gpu.types.GPUVertBuf(shader.format_calc(), 4)
+            vbo.attr_fill("pos", coords)
+            batch = gpu.types.GPUBatch(type="TRI_FAN", buf=vbo)
             shader.bind()
-            shader.uniform_sampler("image", offscr.texture_color)
+            shader.uniform_sampler("image", rgb)
+            # shader.uniform_int("view_size", (w, h))
+            # shader.uniform_int("buffer_size", (rgb.width, rgb.height))
             batch.draw(shader)
             
-        offscr.free()
-
 class MeshDraw:
     def __init__(self, mesh, settings):
         # print("AAAAAAAAAAAAAAA", mesh, flush=True)
