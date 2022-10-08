@@ -63,6 +63,7 @@ PIXEL_2D = """
     void main()
     {
         color = texture(image, uv);
+        if (color.a == 0) discard;
     }
 """
 
@@ -226,7 +227,6 @@ class CustomRenderEngine(bpy.types.RenderEngine):
     # Blender will draw overlays for selection and editing on top of the
     # rendered image automatically.
     def view_draw(self, context, depsgraph):
-        #TODO: implement depth buffer so the overlays don't go over everything
         
         region = context.region
         scene = depsgraph.scene
