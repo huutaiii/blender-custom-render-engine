@@ -3,6 +3,7 @@ Simple Render Engine
 ++++++++++++++++++++
 """
 
+import math
 import os
 import sys
 
@@ -168,6 +169,8 @@ class CustomRenderEngine(bpy.types.RenderEngine):
     # Blender will draw overlays for selection and editing on top of the
     # rendered image automatically.
     def view_draw(self, context, depsgraph):
+        #TODO: implement depth buffer so the overlays don't go over everything
+        
         region = context.region
         scene = depsgraph.scene
 
@@ -177,7 +180,10 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         settings = self.get_settings(context)
 
         fb = gpu.state.active_framebuffer_get() # it's framebuffer_active_get in the api docs wtf?
-        offscr = gpu.types.GPUOffScreen(400, 300)
+        x, y, w, h = gpu.state.viewport_get()
+
+        offscr_scale = settings.backbuffer_scale
+        offscr = gpu.types.GPUOffScreen(math.floor(w * offscr_scale), math.floor(h * offscr_scale))
 
         with offscr.bind():
 
@@ -209,7 +215,12 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             gpu.state.depth_mask_set(False)
             gpu.state.face_culling_set("NONE")
             
-            draw_texture_2d(offscr.texture_color, (10, 10), 400, 300)
+            # draw_texture_2d(offscr.texture_color, (x, y), w, h)
+            shader = gpu.shader.from_builtin("2D_IMAGE")
+            batch = batch_for_shader(shader, "TRI_FAN", {"pos": ((x, y), (w, y), (w, h), (x, h)), "texCoord": ((0, 0), (1, 0), (1, 1), (0, 1))})
+            shader.bind()
+            shader.uniform_sampler("image", offscr.texture_color)
+            batch.draw(shader)
             
         offscr.free()
 
@@ -311,6 +322,8 @@ class MeshDraw:
         self.batch.draw(self.shader)
 
 class CustomRenderEngineSettings(bpy.types.PropertyGroup):
+    backbuffer_scale: bpy.props.FloatProperty(name="Backbuffer Scale", default=1.0, min=0.1, max=10)
+
     enable_outline: bpy.props.BoolProperty(name="Render Outlines", default=True, options=set())
     outline_width: bpy.props.FloatProperty(name="Outline Width", default=1, min=0, soft_max=10, options=set())
     outline_depth_exponent: bpy.props.FloatProperty(name="Outline Depth Scale Exponent", default=0.75, min=0, max=1, options=set())
@@ -352,6 +365,7 @@ class CustomRenderEnginePanel(bpy.types.Panel):
         layout.use_property_decorate = True
         layout.use_property_split = True
         settings = context.scene.custom_render_engine
+        layout.prop(settings, "backbuffer_scale")
         layout.prop(settings, "enable_outline")
         layout.prop(settings, "outline_width")
         layout.prop(settings, "outline_depth_exponent")
