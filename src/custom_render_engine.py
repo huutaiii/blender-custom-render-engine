@@ -4,7 +4,6 @@ Simple Render Engine
 """
 
 import os
-from pydoc import describe
 import sys
 
 def get_path(file):
@@ -25,12 +24,10 @@ sys.path.append(get_path(""))
 import operators
 
 import bpy
-import bgl
 import gpu
 from gpu_extras.batch import batch_for_shader
 import mathutils
 import numpy as np
-import time
 
 bl_info = {
     "name": "Custom Render Engine",
@@ -178,34 +175,35 @@ class CustomRenderEngine(bpy.types.RenderEngine):
 
         settings = self.get_settings(context)
 
-        # buffer = bgl.Buffer(bgl.GL_INT, 1)
-        # bgl.glGetIntegerv(bgl.GL_DRAW_FRAMEBUFFER, buffer)
-        # print(buffer, flush=True)
+        fb = gpu.state.active_framebuffer_get() # it's framebuffer_active_get in the api docs wtf?
 
-        if settings.world_color_clear:
-            color = settings.world_color
-            bgl.glClearColor(color[0], color[1], color[2], 1)
-        bgl.glClear(bgl.GL_COLOR_BUFFER_BIT | bgl.GL_DEPTH_BUFFER_BIT | bgl.GL_STENCIL_BUFFER_BIT)
+        with fb.bind():
 
-        # Bind (fragment) shader that converts from scene linear to display space,
-        # self.bind_display_space_shader(scene)
+            if settings.world_color_clear:
+                color = settings.world_color
+            else:
+                color = None
+            fb.clear(color=color, depth=1)
 
-        bgl.glEnable(bgl.GL_DEPTH_TEST)
-        bgl.glEnable(bgl.GL_CULL_FACE)
-        bgl.glCullFace(bgl.GL_BACK)
+            # Bind (fragment) shader that converts from scene linear to display space,
+            # self.bind_display_space_shader(scene)
 
-        for object in self.mesh_objects:
-            draw = self.draw_calls[object.name]
-            draw.draw(object.matrix_world, context.region_data, self.lights, settings)
-        # for key, draw in self.draw_calls.items():
-        #     print(draw.object.name, " ", draw.object.hide_viewport, flush=True)
-        #     draw.draw(draw.object.matrix_world, context.region_data, self.lights, settings)
+            gpu.state.depth_test_set("LESS")
+            gpu.state.depth_mask_set(True)
+            gpu.state.face_culling_set("BACK")
+
+            for object in self.mesh_objects:
+                draw = self.draw_calls[object.name]
+                draw.draw(object.matrix_world, context.region_data, self.lights, settings)
+            # for key, draw in self.draw_calls.items():
+            #     print(draw.object.name, " ", draw.object.hide_viewport, flush=True)
+            #     draw.draw(draw.object.matrix_world, context.region_data, self.lights, settings)
 
 
-        # self.unbind_display_space_shader()
+            # self.unbind_display_space_shader()
 
-        bgl.glDisable(bgl.GL_DEPTH_TEST)
-        bgl.glDisable(bgl.GL_CULL_FACE)
+            # gpu.state.depth_mask_set(False)
+            # gpu.state.face_culling_set("NONE")
 
 class MeshDraw:
     def __init__(self, mesh, settings):
@@ -254,6 +252,7 @@ class MeshDraw:
         self.shader = gpu.types.GPUShader(VERTEX_SHADER, PIXEL_SHADER, geocode=GEOMETRY_SHADER)
         self.batch = batch_for_shader(self.shader, 'TRIS', {"position": vertices, "normal": normals, "tangent": tangents, "bitangent_sign": bitangent_signs, "uv": uvs, "color": color}, indices=indices)
 
+
     def draw(self, transform, region_data, lights, settings):
         def min(a, b):
             if a > b:
@@ -283,18 +282,20 @@ class MeshDraw:
             self.shader.uniform_bool("use_vertexcolor_rgb", [settings.use_vertexcolor_rgb])
 
             try:
-                basecolor = bpy.data.images[settings.basecolor_texture]
-                if basecolor and basecolor.gl_load() == 0:
-                    bgl.glActiveTexture(bgl.GL_TEXTURE0)
-                    bgl.glBindTexture(bgl.GL_TEXTURE_2D, basecolor.bindcode)
-                    self.shader.uniform_int("tbasecolor", 0)
-                    self.shader.uniform_bool("use_tbasecolor", [True])
-                shadowtint = bpy.data.images[settings.shadowtint_texture]
-                if shadowtint and shadowtint.gl_load() == 0:
-                    bgl.glActiveTexture(bgl.GL_TEXTURE1)
-                    bgl.glBindTexture(bgl.GL_TEXTURE_2D, shadowtint.bindcode)
-                    self.shader.uniform_int("tshadowtint", 1)
-                    self.shader.uniform_bool("use_tshadowtint", [True])
+                if settings.basecolor_texture:
+                    tbasecolor = gpu.texture.from_image(bpy.data.images[settings.basecolor_texture])
+                else:
+                    tbasecolor = gpu.types.GPUTexture((1, 1))
+                    tbasecolor.clear(format="FLOAT", value=(0.5, 0.5, 0.5, 1))
+                self.shader.uniform_sampler("tbasecolor", tbasecolor)
+                
+                if settings.shadowtint_texture:
+                    tshadowtint = gpu.texture.from_image(bpy.data.images[settings.basecolor_texture])
+                else:
+                    tshadowtint = gpu.types.GPUTexture((1, 1))
+                    tshadowtint.clear(format="FLOAT", value=(0, 0, 0, 1))
+                self.shader.uniform_sampler("tshadowtint", tshadowtint)
+
             except KeyError:
                 pass
         except ValueError:

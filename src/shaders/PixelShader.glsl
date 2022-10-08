@@ -11,8 +11,6 @@ out vec4 color; // gl_FragColor
 
 uniform mat4 directional_lights;
 uniform float shading_sharpness;
-uniform bool use_tbasecolor;
-uniform bool use_tshadowtint;
 uniform sampler2D tbasecolor;
 uniform sampler2D tshadowtint;
 uniform vec4 world_color;
@@ -26,8 +24,8 @@ void main()
     } 
     else
     {
-        vec3 base_color = use_tbasecolor ? texture(tbasecolor, uv).xyz : vec3(1, 1, 1);
-        vec3 shadow_tint = use_tshadowtint ? texture(tshadowtint, uv).xyz : vec3(0, 0, 0);
+        vec3 base_color = texture(tbasecolor, uv).xyz;
+        vec3 shadow_tint = texture(tshadowtint, uv).xyz;
         float fresnel = smoothstep(mix(0.33, 0.67, shading_sharpness), mix(1.0, 0.671, shading_sharpness), 1 - dot(normal, view)) * fresnel_fac;
         color.xyz = base_color * world_color.xyz * (1 + fresnel);
         for (int i = 0; i <= 3; ++i)
