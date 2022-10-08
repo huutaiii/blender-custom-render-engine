@@ -26,6 +26,7 @@ import operators
 import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
+from gpu_extras.presets import draw_texture_2d
 import mathutils
 import numpy as np
 
@@ -176,14 +177,15 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         settings = self.get_settings(context)
 
         fb = gpu.state.active_framebuffer_get() # it's framebuffer_active_get in the api docs wtf?
+        offscr = gpu.types.GPUOffScreen(400, 300)
 
-        with fb.bind():
+        with offscr.bind():
 
             if settings.world_color_clear:
                 color = settings.world_color
             else:
                 color = None
-            fb.clear(color=color, depth=1)
+            gpu.state.active_framebuffer_get().clear(color=color, depth=1)
 
             # Bind (fragment) shader that converts from scene linear to display space,
             # self.bind_display_space_shader(scene)
@@ -202,8 +204,14 @@ class CustomRenderEngine(bpy.types.RenderEngine):
 
             # self.unbind_display_space_shader()
 
-            # gpu.state.depth_mask_set(False)
-            # gpu.state.face_culling_set("NONE")
+        with fb.bind():
+            gpu.state.depth_test_set("ALWAYS")
+            gpu.state.depth_mask_set(False)
+            gpu.state.face_culling_set("NONE")
+            
+            draw_texture_2d(offscr.texture_color, (10, 10), 400, 300)
+            
+        offscr.free()
 
 class MeshDraw:
     def __init__(self, mesh, settings):
