@@ -27,7 +27,6 @@ import operators
 import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
-from gpu_extras.presets import draw_texture_2d
 import mathutils
 import numpy as np
 
@@ -57,50 +56,52 @@ VERTEX_2D = """
 
 PIXEL_2D = """
     uniform sampler2D image;
+    uniform sampler2D depth;
     in vec2 uv;
     out vec4 color;
 
     void main()
     {
         color = texture(image, uv);
-        if (color.a == 0) discard;
+        gl_FragDepth = texture(depth, uv).x;
     }
 """
 
-PIXEL_AVG = """
-    uniform sampler2D image;
-    uniform ivec2 view_size;
-    uniform ivec2 buffer_size;
+# PIXEL_AVG = """
+#     uniform sampler2D image;
+#     uniform sampler2D depth;
+#     uniform ivec2 view_size;
+#     uniform ivec2 buffer_size;
 
-    in vec2 uv;
+#     in vec2 uv;
 
-    out vec4 color;
+#     out vec4 color;
 
-    void main()
-    {
-        vec4 tex = texture(image, uv);
-        if (length(view_size) < length(buffer_size))
-        {
-            int count = 0;
-            vec4 acc = vec4(0);
-            ivec2 scale = view_size / buffer_size;
-            ivec2 ipos = ivec2(round(uv * buffer_size));
-            ivec2 end = ipos + scale;
-            for (; ipos.x <= end.x; ++ipos.x)
-            {
-                for (; ipos.y <= end.y; ++ipos.y)
-                {
-                    vec4 texel = texelFetch(image, ipos, 0);
-                    acc += texel;
-                    ++count;
-                }
-            }
-            acc /= count;
-            tex = acc;
-        }
-        color = tex;
-    }
-"""
+#     void main()
+#     {
+#         vec4 tex = texture(image, uv);
+#         if (length(view_size) < length(buffer_size))
+#         {
+#             int count = 0;
+#             vec4 acc = vec4(0);
+#             ivec2 scale = view_size / buffer_size;
+#             ivec2 ipos = ivec2(round(uv * buffer_size));
+#             ivec2 end = ipos + scale;
+#             for (; ipos.x <= end.x; ++ipos.x)
+#             {
+#                 for (; ipos.y <= end.y; ++ipos.y)
+#                 {
+#                     vec4 texel = texelFetch(image, ipos, 0);
+#                     acc += texel;
+#                     ++count;
+#                 }
+#             }
+#             acc /= count;
+#             tex = acc;
+#         }
+#         color = tex;
+#     }
+# """
 
 class CustomRenderEngine(bpy.types.RenderEngine):
     # These three members are used by blender to set up the
@@ -248,11 +249,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
 
         with rb.bind():
 
-            if settings.world_color_clear:
-                color = settings.world_color
-            else:
-                color = None
-            gpu.state.active_framebuffer_get().clear(color=color, depth=1)
+            gpu.state.active_framebuffer_get().clear(color=(0, 0, 0, 0), depth=1.0)
 
             # Bind (fragment) shader that converts from scene linear to display space,
             # self.bind_display_space_shader(scene)
@@ -272,6 +269,10 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             # self.unbind_display_space_shader()
 
         with fb.bind():
+            if settings.world_color_clear:
+                fb.clear(color=settings.world_color)
+            fb.clear(depth=1.0)
+
             gpu.state.depth_test_set("LESS")
             gpu.state.depth_mask_set(True)
             gpu.state.face_culling_set("NONE")
@@ -283,6 +284,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             batch = gpu.types.GPUBatch(type="TRI_FAN", buf=vbo)
             shader.bind()
             shader.uniform_sampler("image", rgb)
+            shader.uniform_sampler("depth", z)
             # shader.uniform_int("view_size", (w, h))
             # shader.uniform_int("buffer_size", (rgb.width, rgb.height))
             batch.draw(shader)
