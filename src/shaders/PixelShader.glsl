@@ -7,7 +7,7 @@ in vec3 view;
 in vec2 uv;
 in float outline;
 
-out vec4 color; // gl_FragColor
+layout (location = 0) out vec4 color; // gl_FragColor
 
 uniform mat4 directional_lights;
 uniform float shading_sharpness;

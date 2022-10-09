@@ -3,6 +3,7 @@ Simple Render Engine
 ++++++++++++++++++++
 """
 
+from email.policy import default
 import math
 import os
 import sys
@@ -62,7 +63,7 @@ PIXEL_2D = """
 
     void main()
     {
-        color = texture(image, uv);
+        color = finalize_color(texture(image, uv));
         gl_FragDepth = texture(depth, uv).x;
     }
 """
@@ -102,6 +103,21 @@ PIXEL_2D = """
 #         color = tex;
 #     }
 # """
+
+PIXEL_SCENE_LIGHTING = """
+    uniform sampler2D tbasecolor;
+    in vec2 uv;
+
+    out vec4 color;
+
+    uniform vec4 scene_color;
+
+    void main()
+    {
+        color.rgb = texture(tbasecolor, uv).rgb * scene_color.rgb;
+        color.a = 1;
+    }
+"""
 
 class CustomRenderEngine(bpy.types.RenderEngine):
     # These three members are used by blender to set up the
@@ -175,8 +191,8 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             for datablock in depsgraph.ids:
                 if isinstance(datablock, bpy.types.Object) and datablock.type == 'MESH':
                     # print(datablock.type, " ", datablock.name, flush=True)
-                    draw = MeshDraw(datablock.data, self.get_settings(context))
-                    draw.object = datablock
+                    draw = BasePassRendering(datablock.data)
+                    # draw.object = datablock
                     self.draw_calls[datablock.name] = draw
                 pass
         else:
@@ -190,8 +206,8 @@ class CustomRenderEngine(bpy.types.RenderEngine):
                 and datablock.type == 'MESH' and update.is_updated_geometry:
                     # print("mesh updated: ", datablock.name, flush=True)
                     # del self.draw_calls[datablock.name]
-                    draw = MeshDraw(datablock.data, self.get_settings(context))
-                    draw.object = datablock
+                    draw = BasePassRendering(datablock.data)
+                    # draw.object = datablock
                     self.draw_calls[datablock.name] = draw
 
             # Test if any material was added, removed or changed.
@@ -219,7 +235,8 @@ class CustomRenderEngine(bpy.types.RenderEngine):
                         light_direction.rotate(object.matrix_world.decompose()[1])
                         light = light_direction.to_4d()
                         light.w = object.data.energy
-                        self.lights.append(light)
+                        # self.lights.append(light)
+                        self.lights.append(DirectionalLightRendering(object))
 
 
     # For viewport renders, this method is called whenever Blender redraws
@@ -241,13 +258,17 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         x, y, w, h = gpu.state.viewport_get()
 
         offscr_scale = settings.backbuffer_scale
+        fb_size = (math.floor(w * offscr_scale), math.floor(h * offscr_scale))
         # if offscr_scale > 1:
         #     offscr_scale = math.floor(offscr_scale)
-        rgb = gpu.types.GPUTexture((math.floor(w * offscr_scale), math.floor(h * offscr_scale)), format="RGBA16")
-        z = gpu.types.GPUTexture((math.floor(w * offscr_scale), math.floor(h * offscr_scale)), format="DEPTH_COMPONENT24")
-        rb = gpu.types.GPUFrameBuffer(depth_slot=z, color_slots=(rgb))
+        basecolor = gpu.types.GPUTexture(fb_size, format="RGBA16")
+        shadowcolor = gpu.types.GPUTexture(fb_size, format="RGBA16")
+        normal = gpu.types.GPUTexture(fb_size, format="RGBA32F")
+        t_lighting_mask = gpu.types.GPUTexture(fb_size, format="R8")
+        z = gpu.types.GPUTexture(fb_size, format="DEPTH_COMPONENT24")
+        gbuffer = gpu.types.GPUFrameBuffer(depth_slot=z, color_slots=(basecolor, shadowcolor, normal, t_lighting_mask))
 
-        with rb.bind():
+        with gbuffer.bind():
 
             gpu.state.active_framebuffer_get().clear(color=(0, 0, 0, 0), depth=1.0)
 
@@ -260,13 +281,55 @@ class CustomRenderEngine(bpy.types.RenderEngine):
 
             for object in self.mesh_objects:
                 draw = self.draw_calls[object.name]
-                draw.draw(object.matrix_world, context.region_data, self.lights, settings)
+                draw.draw(object.matrix_world, context.region_data, settings)
             # for key, draw in self.draw_calls.items():
             #     print(draw.object.name, " ", draw.object.hide_viewport, flush=True)
             #     draw.draw(draw.object.matrix_world, context.region_data, self.lights, settings)
 
 
             # self.unbind_display_space_shader()
+        
+        tscenelit = gpu.types.GPUTexture(fb_size, format="RGBA16")
+        lighting = gpu.types.GPUFrameBuffer(color_slots=(tscenelit))
+
+        with lighting.bind():
+            lighting.clear(color=(0, 0, 0, 0))
+            gpu.state.blend_set("ADDITIVE_PREMULT")
+            gpu.state.depth_test_set("ALWAYS")
+
+            shader = gpu.types.GPUShader(VERTEX_2D, PIXEL_SCENE_LIGHTING)
+            shader.bind()
+            shader.uniform_float("scene_color", settings.world_color)
+            shader.uniform_sampler("tbasecolor", basecolor)
+            batch_for_shader(shader, "TRI_FAN", {"pos": ((0, 0), (1, 0), (1, 1), (0, 1))}).draw(shader)
+
+            for light in self.lights:
+                light.draw(basecolor, shadowcolor, normal, t_lighting_mask)
+
+        pixel_shader_prefix = """
+            vec4 finalize_color(vec4 incolor) { return incolor; }
+        """
+        match settings.out_buffer:
+            case "SCENELIT":
+                out_texture = tscenelit
+            case "BASECOLOR":
+                out_texture = basecolor
+            case "SHADOWCOLOR":
+                out_texture = shadowcolor
+            case "NORMAL":
+                out_texture = normal
+                pixel_shader_prefix = """
+                    vec4 finalize_color(vec4 incolor) { return incolor * 0.5 + 0.5; }
+                """
+            case "DEPTH":
+                out_texture = z
+                pixel_shader_prefix = """
+                    vec4 finalize_color(vec4 incolor)
+                    {
+                        float z = pow(incolor.x, 256);
+                        return vec4(z, z, z, 1);
+                    }
+                """
 
         with fb.bind():
             if settings.world_color_clear:
@@ -278,20 +341,27 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             gpu.state.face_culling_set("NONE")
             
             coords = ((0, 0), (1, 0), (1, 1), (0, 1))
-            shader = gpu.types.GPUShader(VERTEX_2D, PIXEL_2D)
+            shader = gpu.types.GPUShader(VERTEX_2D, pixel_shader_prefix + PIXEL_2D)
             vbo = gpu.types.GPUVertBuf(shader.format_calc(), 4)
             vbo.attr_fill("pos", coords)
             batch = gpu.types.GPUBatch(type="TRI_FAN", buf=vbo)
             shader.bind()
-            shader.uniform_sampler("image", rgb)
+            shader.uniform_sampler("image", out_texture)
             shader.uniform_sampler("depth", z)
             # shader.uniform_int("view_size", (w, h))
             # shader.uniform_int("buffer_size", (rgb.width, rgb.height))
             batch.draw(shader)
             
 class MeshDraw:
-    def __init__(self, mesh, settings):
-        # print("AAAAAAAAAAAAAAA", mesh, flush=True)
+    def __init__(self, mesh):
+
+        self.create_shaders()
+        self.create_batch(mesh)
+
+    def create_shaders(self):
+        self.shader = gpu.types.GPUShader(VERTEX_SHADER, PIXEL_SHADER, geocode=GEOMETRY_SHADER)
+    
+    def create_batch(self, mesh):
         mesh.calc_loop_triangles()
         try:
             mesh.calc_tangents()
@@ -333,11 +403,10 @@ class MeshDraw:
 
         # ibo = gpu.types.GPUIndexBuf(types="TRIS", seq=indices)
 
-        self.shader = gpu.types.GPUShader(VERTEX_SHADER, PIXEL_SHADER, geocode=GEOMETRY_SHADER)
         self.batch = batch_for_shader(self.shader, 'TRIS', {"position": vertices, "normal": normals, "tangent": tangents, "bitangent_sign": bitangent_signs, "uv": uvs, "color": color}, indices=indices)
 
 
-    def draw(self, transform, region_data, lights, settings):
+    def draw_forward(self, transform, region_data, lights, settings):
         def min(a, b):
             if a > b:
                 return b
@@ -386,8 +455,118 @@ class MeshDraw:
             pass
         self.batch.draw(self.shader)
 
+class BasePassRendering(MeshDraw):
+    def create_shaders(self):
+        self.shader = gpu.types.GPUShader(
+            VERTEX_SHADER,
+            open(get_path("shaders/BasePassPixelShader.glsl")).read(),
+            geocode=GEOMETRY_SHADER)
+
+    def draw(self, transform, region_data, settings):
+        shader = self.shader
+        shader.bind()
+
+        shader.uniform_float("matrix_world", transform)
+        shader.uniform_float("view_matrix", region_data.view_matrix)
+        shader.uniform_float("projection_matrix", region_data.window_matrix)
+
+        shader.uniform_bool("render_outlines", [settings.enable_outline])
+        shader.uniform_float("outline_width", settings.outline_width)
+        shader.uniform_float("depth_scale_exponent", settings.outline_depth_exponent)
+        shader.uniform_bool("use_vertexcolor_alpha", [settings.use_vertexcolor_alpha])
+        shader.uniform_bool("use_vertexcolor_rgb", [settings.use_vertexcolor_rgb])
+        
+        if settings.basecolor_texture:
+            tbasecolor = gpu.texture.from_image(bpy.data.images[settings.basecolor_texture])
+        else:
+            tbasecolor = gpu.types.GPUTexture((1, 1))
+            tbasecolor.clear(format="FLOAT", value=(0.5, 0.5, 0.5, 1))
+        shader.uniform_sampler("tbasecolor", tbasecolor)
+        
+        if settings.shadowtint_texture:
+            tshadowtint = gpu.texture.from_image(bpy.data.images[settings.shadowtint_texture])
+        else:
+            tshadowtint = gpu.types.GPUTexture((1, 1))
+            tshadowtint.clear(format="FLOAT", value=(0, 0, 0, 1))
+        shader.uniform_sampler("tshadowtint", tshadowtint)
+
+        self.batch.draw(shader)
+
+class LightRendering:
+    def __init__(self, light_object):
+        self.energy = light_object.data.energy
+        # self.create_shader_info()
+        self.create_shader()
+    
+    def get_defines(self):
+        return ""
+    
+    # def create_shader_info(self):
+    #     self.shaderinfo = gpu.types.GPUShaderCreateInfo()
+    #     self.shaderinfo.vertex_source(VERTEX_2D)
+    #     pixel_shader_source = open(get_path("shaders/DeferredLightPixelShader.glsl")).read()
+    #     self.shaderinfo.fragment_source(pixel_shader_source)
+
+    def create_shader(self):
+        # self.shader = gpu.shader.create_from_info(self.shaderinfo)
+        pixel_shader_source = open(get_path("shaders/DeferredLightPixelShader.glsl")).read()
+        self.shader = gpu.types.GPUShader(VERTEX_2D, pixel_shader_source, defines=self.get_defines())
+        self.batch = batch_for_shader(self.shader, "TRI_FAN", {"pos": ((0, 0), (1, 0), (1, 1), (0, 1))})
+
+    def set_uniforms(self):
+        self.shader.uniform_float("energy", self.energy)
+        pass
+
+    def draw(self, tbasecolor, tshadowcolor, tworldnormal, tmask):
+        shader = self.shader
+        shader.bind()
+        shader.uniform_sampler("tbasecolor", tbasecolor)
+        shader.uniform_sampler("tshadowcolor", tshadowcolor)
+        shader.uniform_sampler("tworldnormal", tworldnormal)
+        shader.uniform_sampler("tmask", tmask)
+
+        self.set_uniforms()
+
+        self.batch.draw(shader)
+
+class DirectionalLightRendering(LightRendering):
+    def __init__(self, light_object):
+        super().__init__(light_object)
+        light_direction = mathutils.Vector((0, 0, 1))
+        light_direction.rotate(light_object.matrix_world.decompose()[1])
+        self.direction = light_direction
+    
+    def get_defines(self):
+        return super().get_defines() + """
+            #define DIRECTIONAL_LIGHT 1
+        """
+    
+    # def create_shader_info(self):
+    #     super().create_shader_info()
+    #     self.shaderinfo.define("DIRECTIONAL_LIGHT", "1")
+    
+    def set_uniforms(self):
+        super().set_uniforms()
+        shader = self.shader
+        shader.uniform_float("light_direction", self.direction)
+
+class LocalLightRendering(LightRendering):
+    pass
+
 class CustomRenderEngineSettings(bpy.types.PropertyGroup):
     backbuffer_scale: bpy.props.FloatProperty(name="Backbuffer Scale", default=1.0, min=0.1, max=10)
+
+    out_buffer: bpy.props.EnumProperty(
+        items = [
+            ("SCENELIT", "Deferred Lighting", ""),
+            ("BASECOLOR", "Base Color", ""),
+            ("SHADOWCOLOR", "Shadow Color", ""),
+            ("NORMAL", "World Normal", ""),
+            ("DEPTH", "Depth", ""),
+        ],
+        name="Out Buffer",
+        options=set()
+    )
 
     enable_outline: bpy.props.BoolProperty(name="Render Outlines", default=True, options=set())
     outline_width: bpy.props.FloatProperty(name="Outline Width", default=1, min=0, soft_max=10, options=set())
@@ -404,14 +583,6 @@ class CustomRenderEngineSettings(bpy.types.PropertyGroup):
     world_color: bpy.props.FloatVectorProperty(name="World Color", size=4, default=(0.1, 0.1, 0.1, 1), subtype='COLOR', min=0, max=1, options=set())
     world_color_clear: bpy.props.BoolProperty(name="World Color Clear", default=False, options=set())
 
-    def get_channel_index(c):
-        return {
-            'R': 0,
-            'G': 1,
-            'B': 2,
-            'A': 3,
-            "0": -1
-        }[c]
 
 class CustomRenderEnginePanel(bpy.types.Panel):
     bl_idname = "RENDER_PT_CustomRenderEngine"
@@ -431,6 +602,7 @@ class CustomRenderEnginePanel(bpy.types.Panel):
         layout.use_property_split = True
         settings = context.scene.custom_render_engine
         layout.prop(settings, "backbuffer_scale")
+        layout.prop(settings, "out_buffer")
         layout.prop(settings, "enable_outline")
         layout.prop(settings, "outline_width")
         layout.prop(settings, "outline_depth_exponent")
