@@ -3,7 +3,6 @@ Simple Render Engine
 ++++++++++++++++++++
 """
 
-from email.policy import default
 import math
 import os
 import sys
@@ -64,6 +63,34 @@ PIXEL_2D = """
     void main()
     {
         color = finalize_color(texture(image, uv));
+        gl_FragDepth = texture(depth, uv).x;
+    }
+"""
+
+PIXEL_DEFERRED_WORLDPOS = """
+    uniform sampler2D image; // unused
+    uniform sampler2D depth;
+    in vec2 uv;
+    out vec4 color;
+    //uniform mat4 mat_view;
+    //uniform mat4 mat_projection;
+    uniform mat4 mat_view_projection;
+
+    vec3 ScreenToWorldPos()
+    {
+        vec4 pos;
+        pos.w = 1;
+        pos.xy = uv * 2 - 1;
+        pos.z = texture(depth, uv).r * 2 - 1;
+        pos = inverse(mat_view_projection) * pos;
+        pos /= pos.w;
+        return pos.xyz;
+    }
+
+    void main()
+    {
+        vec3 pos = ScreenToWorldPos();
+        color = vec4(pos, 1);
         gl_FragDepth = texture(depth, uv).x;
     }
 """
@@ -229,14 +256,17 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             for instance in depsgraph.object_instances:
                 object = instance.object
                 if object.type == 'LIGHT':
-                    if object.data.type == 'SUN':
-                        # print("light: ", object.name)
-                        light_direction = mathutils.Vector((0, 0, 1))
-                        light_direction.rotate(object.matrix_world.decompose()[1])
-                        light = light_direction.to_4d()
-                        light.w = object.data.energy
-                        # self.lights.append(light)
-                        self.lights.append(DirectionalLightRendering(object))
+                    match object.data.type:
+                        case "SUN":
+                            # print("light: ", object.name)
+                            # light_direction = mathutils.Vector((0, 0, 1))
+                            # light_direction.rotate(object.matrix_world.decompose()[1])
+                            # light = light_direction.to_4d()
+                            # light.w = object.data.energy
+                            # self.lights.append(light)
+                            self.lights.append(DirectionalLightRendering(object))
+                        case "POINT" | "SPOT":
+                            self.lights.append(LocalLightRendering(object))
 
 
     # For viewport renders, this method is called whenever Blender redraws
@@ -304,7 +334,9 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             batch_for_shader(shader, "TRI_FAN", {"pos": ((0, 0), (1, 0), (1, 1), (0, 1))}).draw(shader)
 
             for light in self.lights:
-                light.draw(basecolor, shadowcolor, normal, t_lighting_mask)
+                light.draw(context.region_data, z, basecolor, shadowcolor, normal, t_lighting_mask)
+
+        present_pixel_shader = PIXEL_2D
 
         pixel_shader_prefix = """
             vec4 finalize_color(vec4 incolor) { return incolor; }
@@ -330,6 +362,10 @@ class CustomRenderEngine(bpy.types.RenderEngine):
                         return vec4(z, z, z, 1);
                     }
                 """
+            case "POSITION":
+                present_pixel_shader = PIXEL_DEFERRED_WORLDPOS
+                out_texture = tscenelit
+                pixel_shader_prefix = ""
 
         with fb.bind():
             if settings.world_color_clear:
@@ -341,13 +377,18 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             gpu.state.face_culling_set("NONE")
             
             coords = ((0, 0), (1, 0), (1, 1), (0, 1))
-            shader = gpu.types.GPUShader(VERTEX_2D, pixel_shader_prefix + PIXEL_2D)
+            shader = gpu.types.GPUShader(VERTEX_2D, pixel_shader_prefix + present_pixel_shader)
             vbo = gpu.types.GPUVertBuf(shader.format_calc(), 4)
             vbo.attr_fill("pos", coords)
             batch = gpu.types.GPUBatch(type="TRI_FAN", buf=vbo)
             shader.bind()
             shader.uniform_sampler("image", out_texture)
             shader.uniform_sampler("depth", z)
+            if settings.out_buffer == "POSITION":
+                region_data = context.region_data
+                # shader.uniform_float("mat_view", region_data.view_matrix)
+                # shader.uniform_float("mat_projection", region_data.window_matrix)
+                shader.uniform_float("mat_view_projection", region_data.window_matrix @ region_data.view_matrix)
             # shader.uniform_int("view_size", (w, h))
             # shader.uniform_int("buffer_size", (rgb.width, rgb.height))
             batch.draw(shader)
@@ -494,7 +535,7 @@ class BasePassRendering(MeshDraw):
 
 class LightRendering:
     def __init__(self, light_object):
-        self.energy = light_object.data.energy
+        self.object = light_object
         # self.create_shader_info()
         self.create_shader()
     
@@ -513,25 +554,41 @@ class LightRendering:
         self.shader = gpu.types.GPUShader(VERTEX_2D, pixel_shader_source, defines=self.get_defines())
         self.batch = batch_for_shader(self.shader, "TRI_FAN", {"pos": ((0, 0), (1, 0), (1, 1), (0, 1))})
 
-    def set_uniforms(self):
-        self.shader.uniform_float("energy", self.energy)
-        pass
+    def set_uniforms(self, region_data):
+        try:
+            self.shader.uniform_float("energy", self.object.data.energy * self.energy_factor)
+            # self.shader.uniform_float("energy", self.object.data.energy)
+        except ValueError:
+            # optimized out by shader compiler
+            pass
+        try:
+            self.shader.uniform_float("mat_view_projection", region_data.window_matrix @ region_data.view_matrix)
+        except ValueError:
+            # this is dumb
+            pass
+        try:
+            self.shader.uniform_float("light_color", self.object.data.color)
+        except ValueError:
+            pass
 
-    def draw(self, tbasecolor, tshadowcolor, tworldnormal, tmask):
+    def draw(self, region_data, tdepth, tbasecolor, tshadowcolor, tworldnormal, tmask):
         shader = self.shader
         shader.bind()
+        shader.uniform_sampler("tdepth", tdepth)
         shader.uniform_sampler("tbasecolor", tbasecolor)
         shader.uniform_sampler("tshadowcolor", tshadowcolor)
         shader.uniform_sampler("tworldnormal", tworldnormal)
         shader.uniform_sampler("tmask", tmask)
 
-        self.set_uniforms()
+        self.set_uniforms(region_data)
 
         self.batch.draw(shader)
 
 class DirectionalLightRendering(LightRendering):
     def __init__(self, light_object):
+        assert light_object.data.type == "SUN"
         super().__init__(light_object)
+        self.energy_factor = 1
         light_direction = mathutils.Vector((0, 0, 1))
         light_direction.rotate(light_object.matrix_world.decompose()[1])
         self.direction = light_direction
@@ -545,13 +602,42 @@ class DirectionalLightRendering(LightRendering):
     #     super().create_shader_info()
     #     self.shaderinfo.define("DIRECTIONAL_LIGHT", "1")
     
-    def set_uniforms(self):
-        super().set_uniforms()
+    def set_uniforms(self, region_data):
+        super().set_uniforms(region_data)
         shader = self.shader
         shader.uniform_float("light_direction", self.direction)
 
 class LocalLightRendering(LightRendering):
-    pass
+    def __init__(self, light_object):
+        assert light_object.data.type in ("POINT", "SPOT", "AREA")
+        super().__init__(light_object)
+        self.energy_factor = 0.09
+        light = light_object.data
+        self.location = light_object.location
+        self.radius = light.shadow_soft_size
+
+        if light.use_custom_distance:
+            self.attenuation = self.cutoff_distance
+        else:
+            self.attenuation = -1
+    
+    def get_defines(self):
+        return super().get_defines() + """
+            #define LOCAL_LIGHT 1
+        """ + f"\n#define {self.object.data.type}_LIGHT 1\n"
+    
+    def set_uniforms(self, region_data):
+        super().set_uniforms(region_data)
+        shader = self.shader
+        shader.uniform_float("light_location", self.location)
+
+        light = self.object.data
+        if light.type == "SPOT":
+            light_direction = mathutils.Vector((0, 0, 1))
+            light_direction.rotate(self.object.matrix_world.decompose()[1])
+            shader.uniform_float("light_spot_direction", light_direction)
+            shader.uniform_float("light_spot_size", light.spot_size / math.pi)
+            shader.uniform_float("light_spot_blend", light.spot_blend)
 
 class CustomRenderEngineSettings(bpy.types.PropertyGroup):
     backbuffer_scale: bpy.props.FloatProperty(name="Backbuffer Scale", default=1.0, min=0.1, max=10)
@@ -562,6 +648,7 @@ class CustomRenderEngineSettings(bpy.types.PropertyGroup):
             ("BASECOLOR", "Base Color", ""),
             ("SHADOWCOLOR", "Shadow Color", ""),
             ("NORMAL", "World Normal", ""),
+            ("POSITION", "World Position", ""),
             ("DEPTH", "Depth", ""),
         ],
         name="Out Buffer",
@@ -631,10 +718,18 @@ class CustomRenderEngineLightPanel(bpy.types.Panel):
         # layout = self.layout
         light = context.light
         col = self.layout.column()
+        col.prop(light, "color")
         col.prop(light, "energy")
 
-        if (light.type == "SUN"):
-            col.prop(light, "angle")
+        match light.type:
+            case "SUN":
+                col.prop(light, "angle")
+            case "POINT":
+                col.prop(light, "shadow_soft_size")
+            case "SPOT":
+                col.prop(light, "shadow_soft_size")
+                col.prop(light, "spot_size")
+                col.prop(light, "spot_blend")
 
 
 # RenderEngines also need to tell UI Panels that they are compatible with.
