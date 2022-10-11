@@ -90,7 +90,7 @@ PIXEL_DEFERRED_WORLDPOS = """
     void main()
     {
         vec3 pos = ScreenToWorldPos();
-        color = vec4(pos, 1);
+        color = vec4(fract(pos), 1);
         gl_FragDepth = texture(depth, uv).x;
     }
 """
@@ -717,19 +717,20 @@ class CustomRenderEngineLightPanel(bpy.types.Panel):
     def draw(self, context):
         # layout = self.layout
         light = context.light
-        col = self.layout.column()
-        col.prop(light, "color")
-        col.prop(light, "energy")
+        if isinstance(light, bpy.types.Light):
+            col = self.layout.column()
+            col.prop(light, "color")
+            col.prop(light, "energy")
 
-        match light.type:
-            case "SUN":
-                col.prop(light, "angle")
-            case "POINT":
-                col.prop(light, "shadow_soft_size")
-            case "SPOT":
-                col.prop(light, "shadow_soft_size")
-                col.prop(light, "spot_size")
-                col.prop(light, "spot_blend")
+            match light.type:
+                case "SUN":
+                    col.prop(light, "angle")
+                case "POINT":
+                    col.prop(light, "shadow_soft_size")
+                case "SPOT":
+                    col.prop(light, "shadow_soft_size")
+                    col.prop(light, "spot_size")
+                    col.prop(light, "spot_blend")
 
 
 # RenderEngines also need to tell UI Panels that they are compatible with.
