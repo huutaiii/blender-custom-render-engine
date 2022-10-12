@@ -67,6 +67,56 @@ PIXEL_2D = """
     }
 """
 
+PIXEL_RGBL = """
+    uniform sampler2D image;
+    in vec2 uv;
+    out vec4 color;
+
+    void main()
+    {
+        color = texture(image, uv);
+        color.a = dot(color.rgb, vec3(0.3, 0.59, 0.11));
+    }
+"""
+
+PIXEL_FXAA = """
+    uniform sampler2D image;
+    uniform sampler2D depth;
+    in vec2 uv;
+    out vec4 color;
+
+    uniform vec2 invScreenSize;
+
+    FXAA_HEADER
+
+    void main()
+    {
+    #if USE_FXAA
+        color = FxaaPixelShader(
+            uv,
+            vec4(0.0),
+            image,
+            image,
+            image,
+            invScreenSize,
+            vec4(0.0),
+            vec4(0.0),
+            vec4(0.0),
+            0.75,
+            0.166,
+            0.0833,
+            0.0,
+            0.0,
+            0.0,
+            vec4(0.0));
+    #else
+        color = texture(image, uv);
+    #endif
+        color.a = 1;
+        gl_FragDepth = texture(depth, uv).x;
+    }
+"""
+
 PIXEL_DEFERRED_WORLDPOS = """
     uniform sampler2D image; // unused
     uniform sampler2D depth;
@@ -133,6 +183,7 @@ PIXEL_DEFERRED_WORLDPOS = """
 
 PIXEL_SCENE_LIGHTING = """
     uniform sampler2D tbasecolor;
+    uniform sampler2D tmask;
     in vec2 uv;
 
     out vec4 color;
@@ -141,7 +192,14 @@ PIXEL_SCENE_LIGHTING = """
 
     void main()
     {
-        color.rgb = texture(tbasecolor, uv).rgb * scene_color.rgb;
+        vec4 tex = texture(tbasecolor, uv);
+        float mask = texture(tmask, uv).r;
+    #if BACKGROUND_COLOR
+        color.rgb = mix(tex.rgb * scene_color.rgb, scene_color.rgb, 1 - tex.a);
+    #else
+        color.rgb = mix(tex.rgb * scene_color.rgb, vec3(.05), 1 - tex.a);
+    #endif
+        color.rgb = mix(tex.rgb, color.rgb, mask);
         color.a = 1;
     }
 """
@@ -301,6 +359,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         with gbuffer.bind():
 
             gpu.state.active_framebuffer_get().clear(color=(0, 0, 0, 0), depth=1.0)
+            t_lighting_mask.clear(format="FLOAT", value=(1, 1, 1, 1))
 
             # Bind (fragment) shader that converts from scene linear to display space,
             # self.bind_display_space_shader(scene)
@@ -324,17 +383,30 @@ class CustomRenderEngine(bpy.types.RenderEngine):
 
         with lighting.bind():
             lighting.clear(color=(0, 0, 0, 0))
-            gpu.state.blend_set("ADDITIVE_PREMULT")
             gpu.state.depth_test_set("ALWAYS")
 
-            shader = gpu.types.GPUShader(VERTEX_2D, PIXEL_SCENE_LIGHTING)
+            ps_prefix = "\n#define BACKGROUND_COLOR " + ("1" if settings.world_color_clear else "0") + "\n"
+            shader = gpu.types.GPUShader(VERTEX_2D, ps_prefix + PIXEL_SCENE_LIGHTING)
             shader.bind()
             shader.uniform_float("scene_color", settings.world_color)
             shader.uniform_sampler("tbasecolor", basecolor)
+            shader.uniform_sampler("tmask", t_lighting_mask)
             batch_for_shader(shader, "TRI_FAN", {"pos": ((0, 0), (1, 0), (1, 1), (0, 1))}).draw(shader)
 
+            gpu.state.blend_set("ADDITIVE")
             for light in self.lights:
                 light.draw(context.region_data, z, basecolor, shadowcolor, normal, t_lighting_mask)
+            
+            gpu.state.blend_set("NONE")
+        
+        trgbl = gpu.types.GPUTexture(fb_size, format="RGBA16")
+        rgbl = gpu.types.GPUFrameBuffer(color_slots = (trgbl))
+
+        with rgbl.bind():
+            shader = gpu.types.GPUShader(VERTEX_2D, PIXEL_RGBL)
+            shader.bind()
+            shader.uniform_sampler("image", tscenelit)
+            batch_for_shader(shader, "TRI_FAN", {"pos": ((0, 0), (1, 0), (1, 1), (0, 1))}).draw(shader)
 
         present_pixel_shader = PIXEL_2D
 
@@ -343,7 +415,20 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         """
         match settings.out_buffer:
             case "SCENELIT":
-                out_texture = tscenelit
+                if settings.use_fxaa:
+                    out_texture = trgbl
+                    pixel_shader_prefix = """
+                        #define FXAA_GLSL_130 1
+                        #define FXAA_PC 1
+                        //#define FXAA_QUALITY__PRESET 29
+                    """
+                    if settings.use_fxaa:
+                        pixel_shader_prefix += """
+                            #define USE_FXAA 1
+                        """
+                    present_pixel_shader = PIXEL_FXAA.replace("FXAA_HEADER", open(get_path("shaders/FXAA311.glsl")).read())
+                else:
+                    out_texture = tscenelit
             case "BASECOLOR":
                 out_texture = basecolor
             case "SHADOWCOLOR":
@@ -372,9 +457,8 @@ class CustomRenderEngine(bpy.types.RenderEngine):
                 fb.clear(color=settings.world_color)
             fb.clear(depth=1.0)
 
-            gpu.state.depth_test_set("LESS")
+            gpu.state.depth_test_set("ALWAYS")
             gpu.state.depth_mask_set(True)
-            gpu.state.face_culling_set("NONE")
             
             coords = ((0, 0), (1, 0), (1, 1), (0, 1))
             shader = gpu.types.GPUShader(VERTEX_2D, pixel_shader_prefix + present_pixel_shader)
@@ -391,6 +475,10 @@ class CustomRenderEngine(bpy.types.RenderEngine):
                 shader.uniform_float("mat_view_projection", region_data.window_matrix @ region_data.view_matrix)
             # shader.uniform_int("view_size", (w, h))
             # shader.uniform_int("buffer_size", (rgb.width, rgb.height))
+            try:
+                shader.uniform_float("invScreenSize", (1.0 / w, 1.0 / h))
+            except ValueError:
+                pass
             batch.draw(shader)
             
 class MeshDraw:
@@ -513,6 +601,7 @@ class BasePassRendering(MeshDraw):
 
         shader.uniform_bool("render_outlines", [settings.enable_outline])
         shader.uniform_float("outline_width", settings.outline_width)
+        shader.uniform_float("outline_color", settings.outline_color)
         shader.uniform_float("depth_scale_exponent", settings.outline_depth_exponent)
         shader.uniform_bool("use_vertexcolor_alpha", [settings.use_vertexcolor_alpha])
         shader.uniform_bool("use_vertexcolor_rgb", [settings.use_vertexcolor_rgb])
@@ -641,6 +730,7 @@ class LocalLightRendering(LightRendering):
 
 class CustomRenderEngineSettings(bpy.types.PropertyGroup):
     backbuffer_scale: bpy.props.FloatProperty(name="Backbuffer Scale", default=1.0, min=0.1, max=10)
+    use_fxaa: bpy.props.BoolProperty(name="FXAA", default=True)
 
     out_buffer: bpy.props.EnumProperty(
         items = [
@@ -657,6 +747,7 @@ class CustomRenderEngineSettings(bpy.types.PropertyGroup):
 
     enable_outline: bpy.props.BoolProperty(name="Render Outlines", default=True, options=set())
     outline_width: bpy.props.FloatProperty(name="Outline Width", default=1, min=0, soft_max=10, options=set())
+    outline_color: bpy.props.FloatVectorProperty(name="Outline Color", size=4, default=(0, 0, 0, 1), subtype="COLOR", min=0, max=1, options=set())
     outline_depth_exponent: bpy.props.FloatProperty(name="Outline Depth Scale Exponent", default=0.75, min=0, max=1, options=set())
     shading_sharpness: bpy.props.FloatProperty(name="Shading Sharpness", default=1, subtype='FACTOR', min=0, max=1, options=set())
     fresnel_fac: bpy.props.FloatProperty(name="Fresnel Factor", default=0.5, min=0, max=1)
@@ -668,7 +759,7 @@ class CustomRenderEngineSettings(bpy.types.PropertyGroup):
     shadowtint_texture: bpy.props.StringProperty(name="Shadow Tint")
 
     world_color: bpy.props.FloatVectorProperty(name="World Color", size=4, default=(0.1, 0.1, 0.1, 1), subtype='COLOR', min=0, max=1, options=set())
-    world_color_clear: bpy.props.BoolProperty(name="World Color Clear", default=False, options=set())
+    world_color_clear: bpy.props.BoolProperty(name="World Color Background", default=False, options=set())
 
 
 class CustomRenderEnginePanel(bpy.types.Panel):
@@ -689,9 +780,11 @@ class CustomRenderEnginePanel(bpy.types.Panel):
         layout.use_property_split = True
         settings = context.scene.custom_render_engine
         layout.prop(settings, "backbuffer_scale")
+        layout.prop(settings, "use_fxaa")
         layout.prop(settings, "out_buffer")
         layout.prop(settings, "enable_outline")
         layout.prop(settings, "outline_width")
+        layout.prop(settings, "outline_color")
         layout.prop(settings, "outline_depth_exponent")
         layout.prop(settings, "use_vertexcolor_alpha")
         layout.prop(settings, "use_vertexcolor_rgb")

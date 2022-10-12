@@ -14,13 +14,14 @@ layout (location = 3) out float out_lighting_mask;
 
 uniform sampler2D tbasecolor;
 uniform sampler2D tshadowtint;
+uniform vec4 outline_color;
 
 void main()
 {
 
     if (outline > 0)
     {
-        basecolor = vec4(0, 0, 0, 1);
+        basecolor = outline_color;
         shadowcolor = vec4(0, 0, 0, 1);
         out_lighting_mask = 0;
     }
