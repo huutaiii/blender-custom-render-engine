@@ -106,5 +106,6 @@ void main()
     LightData Light = GetLightData(GBuffer, L);
     NdotL = dot(GBuffer.WorldNormal, L);
     color.rgb = NdotL * GBuffer.BaseColor * Light.FinalColor * texture(tmask, uv).x;
+    color.rgb = max(vec3(0), color.rgb);
     color.a = 1;
 }

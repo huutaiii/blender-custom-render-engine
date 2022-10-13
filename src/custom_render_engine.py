@@ -22,7 +22,7 @@ def get_path(file):
 
 sys.path.append(get_path(""))
 
-import operators
+import operators, material
 
 import bpy
 import gpu
@@ -211,6 +211,9 @@ class CustomRenderEngine(bpy.types.RenderEngine):
     bl_label = "Custom"
     bl_use_preview = True
 
+    # Hides Cycles node trees in the node editor.
+    bl_use_shading_nodes_custom = False
+
     # Init is called whenever a new render engine instance is created. Multiple
     # instances may exist at the same time, for example for a viewport and final
     # render.
@@ -228,7 +231,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
 
     def get_settings(self, context):
         return context.scene.custom_render_engine
-
+    
     # This is the method called by Blender for both final renders (F12) and
     # small preview for materials, world and lights.
     def render(self, depsgraph):
@@ -347,11 +350,14 @@ class CustomRenderEngine(bpy.types.RenderEngine):
 
         offscr_scale = settings.backbuffer_scale
         fb_size = (math.floor(w * offscr_scale), math.floor(h * offscr_scale))
+        final_color_format = "RGBA16"
+        gbuffer_format = "RGBA16"
+        normal_format = "RGBA32F"
         # if offscr_scale > 1:
         #     offscr_scale = math.floor(offscr_scale)
-        basecolor = gpu.types.GPUTexture(fb_size, format="RGBA16")
-        shadowcolor = gpu.types.GPUTexture(fb_size, format="RGBA16")
-        normal = gpu.types.GPUTexture(fb_size, format="RGBA32F")
+        basecolor = gpu.types.GPUTexture(fb_size, format=gbuffer_format)
+        shadowcolor = gpu.types.GPUTexture(fb_size, format=gbuffer_format)
+        normal = gpu.types.GPUTexture(fb_size, format=normal_format)
         t_lighting_mask = gpu.types.GPUTexture(fb_size, format="R8")
         z = gpu.types.GPUTexture(fb_size, format="DEPTH_COMPONENT24")
         gbuffer = gpu.types.GPUFrameBuffer(depth_slot=z, color_slots=(basecolor, shadowcolor, normal, t_lighting_mask))
@@ -378,7 +384,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
 
             # self.unbind_display_space_shader()
         
-        tscenelit = gpu.types.GPUTexture(fb_size, format="RGBA16")
+        tscenelit = gpu.types.GPUTexture(fb_size, format=final_color_format)
         lighting = gpu.types.GPUFrameBuffer(color_slots=(tscenelit))
 
         with lighting.bind():
@@ -399,7 +405,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             
             gpu.state.blend_set("NONE")
         
-        trgbl = gpu.types.GPUTexture(fb_size, format="RGBA16")
+        trgbl = gpu.types.GPUTexture(fb_size, format=final_color_format)
         rgbl = gpu.types.GPUFrameBuffer(color_slots = (trgbl))
 
         with rgbl.bind():
@@ -836,11 +842,21 @@ def get_panels():
         'VIEWLAYER_PT_layer_passes',
     }
 
+    include_panels = {
+        "DATA_PT_EEVEE_light",
+        "DATA_PT_EEVEE_light_distance",
+        "DATA_PT_EEVEE_shadow",
+        "EEVEE_MATERIAL_PT_context_material",
+        # "EEVEE_MATERIAL_PT_surface",
+    }
+
     panels = []
     for panel in bpy.types.Panel.__subclasses__():
         if hasattr(panel, 'COMPAT_ENGINES') and 'BLENDER_RENDER' in panel.COMPAT_ENGINES:
             if panel.__name__ not in exclude_panels:
                 panels.append(panel)
+        if panel.__name__ in include_panels:
+            panels.append(panel)
 
     return panels
 
@@ -848,7 +864,7 @@ classes = [
     CustomRenderEngine,
     CustomRenderEngineSettings,
     CustomRenderEnginePanel,
-    CustomRenderEngineLightPanel
+    # CustomRenderEngineLightPanel
 ]
 
 def register():
@@ -862,6 +878,7 @@ def register():
     bpy.types.Scene.custom_render_engine = bpy.props.PointerProperty(type=CustomRenderEngineSettings)
 
     operators.register()
+    material.register()
 
 
 def unregister():
@@ -873,6 +890,7 @@ def unregister():
             panel.COMPAT_ENGINES.remove('CUSTOM')
 
     operators.unregister()
+    material.unregister()
 
 
 if __name__ == "__main__":
