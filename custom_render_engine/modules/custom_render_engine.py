@@ -4,25 +4,6 @@ Simple Render Engine
 """
 
 import math
-import os
-import sys
-
-def get_path(file):
-    delimiter = None
-    if os.name == 'nt':
-        delimiter = '\\'
-    if os.name == 'posix':
-        delimiter = '/'
-    if not delimiter:
-        raise RuntimeError("Platform not supported")
-    names = __file__.split(delimiter)
-    path = delimiter.join(names[:len(names)-1]) + delimiter
-    path += file.replace('/', delimiter)
-    return path
-
-sys.path.append(get_path(""))
-
-import operators, material
 
 import bpy
 import gpu
@@ -30,18 +11,12 @@ from gpu_extras.batch import batch_for_shader
 import mathutils
 import numpy as np
 
-bl_info = {
-    "name": "Custom Render Engine",
-    # "description": "Single line explaining what this script exactly does.",
-    "author": "huutai",
-    "version": (0, 1),
-    "blender": (3, 3, 0),
-    "category": "Render",
-}
+# from . import material
+# print(material.__name__, flush=True)
 
-VERTEX_SHADER = open(get_path("shaders/VertexShader.glsl")).read()
-GEOMETRY_SHADER = open(get_path("shaders/GeometryShader.glsl")).read()
-PIXEL_SHADER = open(get_path("shaders/PixelShader.glsl")).read()
+VERTEX_SHADER = open("shaders/VertexShader.glsl").read()
+GEOMETRY_SHADER = open("shaders/GeometryShader.glsl").read()
+PIXEL_SHADER = open("shaders/PixelShader.glsl").read()
 
 VERTEX_2D = """
     in vec2 pos;
@@ -432,7 +407,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
                         pixel_shader_prefix += """
                             #define USE_FXAA 1
                         """
-                    present_pixel_shader = PIXEL_FXAA.replace("FXAA_HEADER", open(get_path("shaders/FXAA311.glsl")).read())
+                    present_pixel_shader = PIXEL_FXAA.replace("FXAA_HEADER", open("shaders/FXAA311.glsl").read())
                 else:
                     out_texture = tscenelit
             case "BASECOLOR":
@@ -594,7 +569,7 @@ class BasePassRendering(MeshDraw):
     def create_shaders(self):
         self.shader = gpu.types.GPUShader(
             VERTEX_SHADER,
-            open(get_path("shaders/BasePassPixelShader.glsl")).read(),
+            open("shaders/BasePassPixelShader.glsl").read(),
             geocode=GEOMETRY_SHADER)
 
     def draw(self, transform, region_data, settings):
@@ -645,7 +620,7 @@ class LightRendering:
 
     def create_shader(self):
         # self.shader = gpu.shader.create_from_info(self.shaderinfo)
-        pixel_shader_source = open(get_path("shaders/DeferredLightPixelShader.glsl")).read()
+        pixel_shader_source = open("shaders/DeferredLightPixelShader.glsl").read()
         self.shader = gpu.types.GPUShader(VERTEX_2D, pixel_shader_source, defines=self.get_defines())
         self.batch = batch_for_shader(self.shader, "TRI_FAN", {"pos": ((0, 0), (1, 0), (1, 1), (0, 1))})
 
@@ -877,9 +852,6 @@ def register():
 
     bpy.types.Scene.custom_render_engine = bpy.props.PointerProperty(type=CustomRenderEngineSettings)
 
-    operators.register()
-    material.register()
-
 
 def unregister():
     for c in classes:
@@ -889,9 +861,3 @@ def unregister():
         if 'CUSTOM' in panel.COMPAT_ENGINES:
             panel.COMPAT_ENGINES.remove('CUSTOM')
 
-    operators.unregister()
-    material.unregister()
-
-
-if __name__ == "__main__":
-    register()

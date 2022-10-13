@@ -21,7 +21,7 @@ function GetBlenderPathWin64(useLauncher = false)
 const BLENDER_EXEC_WINDOWS = process.env.ProgramW6432 + "\\Blender Foundation\\Blender 2.93\\blender.exe"
 const BLENDER_EXEC_LINUX = "blender"
 const TEST_FILE	= GetAbsolutePath('test_file.blend')
-const SCRIPT = GetAbsolutePath('src/custom_render_engine.py')
+const SCRIPT = GetAbsolutePath('custom_render_engine/__init__.py')
 console.log("script path: " + SCRIPT)
 
 const file = (() => {
