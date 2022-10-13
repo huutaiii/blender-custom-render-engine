@@ -683,8 +683,10 @@ class LocalLightRendering(LightRendering):
         super().__init__(light_object)
         self.energy_factor = 0.09
         light = light_object.data
-        self.location = light_object.location
-        self.radius = light.shadow_soft_size
+
+        # this cannot get instanced lights' location (eg. paticle systems, geometry nodes)
+        # maybe try to fix that?
+        self.location = light_object.matrix_world.to_translation()
 
         if light.use_custom_distance:
             self.attenuation = self.cutoff_distance
