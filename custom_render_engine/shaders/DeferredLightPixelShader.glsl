@@ -6,6 +6,7 @@ uniform sampler2D tbasecolor;
 uniform sampler2D tshadowcolor;
 uniform sampler2D tworldnormal;
 uniform sampler2D tmask;
+uniform usampler2D tshadingmodel;
 
 out vec4 color;
 
@@ -34,6 +35,7 @@ struct GBufferData
     vec3 ShadowColor;
     vec3 WorldNormal;
     vec3 WorldPos;
+    uint ShadingModel;
 };
 
 struct LightData
@@ -53,6 +55,8 @@ float ConeInterp(float x)
 {
     return -1 * cos(x * PI / 2) + 1;
 }
+
+float saturate(float x) { return clamp(x, 0.f, 1.f); }
 
 LightData GetLightData(GBufferData GBuffer, vec3 L)
 {
@@ -91,7 +95,23 @@ GBufferData SampleScreenTextures(vec2 ScreenCoords)
     OutBuffer.ShadowColor = texture(tshadowcolor, ScreenCoords).rgb;
     OutBuffer.WorldNormal = texture(tworldnormal, ScreenCoords).rgb;
     OutBuffer.WorldPos = ScreenToWorldPos(ScreenCoords);
+    uint shadingmodel = texture(tshadingmodel, ScreenCoords).r;
+    OutBuffer.ShadingModel = shadingmodel;
     return OutBuffer;
+}
+
+vec3 GetDirectLighting(GBufferData GBuffer, float NdotL, LightData Light)
+{
+    switch (GBuffer.ShadingModel)
+    {
+        default:
+        case SHADINGMODEL_UNLIT:
+            return vec3(0);
+        case SHADINGMODEL_LAMBERT:
+            return GBuffer.BaseColor * saturate(NdotL) * Light.FinalColor;
+        case SHADINGMODEL_TOON:
+            return mix(GBuffer.ShadowColor, GBuffer.BaseColor, ceil(NdotL)) * Light.FinalColor;
+    }
 }
 
 void main()
@@ -105,7 +125,6 @@ void main()
 #endif
     LightData Light = GetLightData(GBuffer, L);
     NdotL = dot(GBuffer.WorldNormal, L);
-    color.rgb = NdotL * GBuffer.BaseColor * Light.FinalColor * texture(tmask, uv).x;
-    color.rgb = max(vec3(0), color.rgb);
+    color.rgb = GetDirectLighting(GBuffer, NdotL, Light);
     color.a = 1;
 }

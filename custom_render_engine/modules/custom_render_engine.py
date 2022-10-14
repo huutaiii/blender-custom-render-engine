@@ -4,6 +4,7 @@ Simple Render Engine
 """
 
 import math
+import typing
 
 import bpy
 import gpu
@@ -11,7 +12,7 @@ from gpu_extras.batch import batch_for_shader
 import mathutils
 import numpy as np
 
-# from . import material
+from .material import CustomRenderEngineMaterialSettings
 # print(material.__name__, flush=True)
 
 VERTEX_SHADER = open("shaders/VertexShader.glsl").read()
@@ -120,6 +121,32 @@ PIXEL_DEFERRED_WORLDPOS = """
     }
 """
 
+PIXEL_SHADINGMODEL = """
+    uniform usampler2D image;
+    in vec2 uv;
+    out vec4 color;
+
+    void main()
+    {
+        uint shadingmodel = texture(image, uv).r;
+        switch (shadingmodel)
+        {
+            case SHADINGMODEL_UNLIT:
+                color = vec4(0, 0, 0, 1);
+                break;
+            case SHADINGMODEL_LAMBERT:
+                color = vec4(1, 0, 0, 1);
+                break;
+            case SHADINGMODEL_TOON:
+                color = vec4(0, 1, 0, 1);
+                break;
+            default:
+                color = vec4(1, 1, 1, 1);
+                break;
+        }
+    }
+"""
+
 # PIXEL_AVG = """
 #     uniform sampler2D image;
 #     uniform sampler2D depth;
@@ -158,7 +185,7 @@ PIXEL_DEFERRED_WORLDPOS = """
 
 PIXEL_SCENE_LIGHTING = """
     uniform sampler2D tbasecolor;
-    uniform sampler2D tmask;
+    uniform usampler2D tshadingmodel;
     in vec2 uv;
 
     out vec4 color;
@@ -168,13 +195,19 @@ PIXEL_SCENE_LIGHTING = """
     void main()
     {
         vec4 tex = texture(tbasecolor, uv);
-        float mask = texture(tmask, uv).r;
-    #if BACKGROUND_COLOR
-        color.rgb = mix(tex.rgb * scene_color.rgb, scene_color.rgb, 1 - tex.a);
-    #else
-        color.rgb = mix(tex.rgb * scene_color.rgb, vec3(.05), 1 - tex.a);
-    #endif
-        color.rgb = mix(tex.rgb, color.rgb, mask);
+        uint shadingmodel = texture(tshadingmodel, uv).r;
+        if (shadingmodel != SHADINGMODEL_UNLIT)
+        {
+            color.rgb = (tex.rgb * scene_color.rgb);
+        }
+        else
+        {
+        #if BACKGROUND_COLOR
+            color.rgb = mix(tex.rgb, scene_color.rgb, 1 - tex.a);
+        #else
+            color.rgb = mix(tex.rgb, vec3(.05), 1 - tex.a);
+        #endif
+        }
         color.a = 1;
     }
 """
@@ -198,6 +231,7 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         self.draw_calls = {}
         self.lights = []
         self.mesh_objects = []
+        self.material_shaders = dict()
 
     # When the render engine instance is destroy, this is called. Clean up any
     # render engine data here, for example stopping running render threads.
@@ -232,6 +266,28 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         layer.rect = rect
         self.end_result(result)
 
+    def create_mesh_draw(self, mesh):
+        material_shader = self.default_material_shader
+        if mesh.active_material:
+            try:
+                material_shader = self.material_shaders[mesh.active_material.name]
+            except KeyError:
+                self.material_shaders[mesh.active_material.name] = MeshMaterialShader(mesh.active_material)
+                material_shader = self.material_shaders[mesh.active_material.name]
+        return BasePassRendering(mesh.data, material_shader)
+    
+    def add_material_user(self, mesh, material):
+        if not material.name in self.materials_users:
+            self.materials_users[material.name] = set()
+        self.materials_users[material.name].add(mesh)
+    
+    def update_material_user(self, mesh, old_material, new_material):
+        self.materials_users[old_material.name].remove(mesh)
+        self.add_material_user(mesh, new_material)
+    
+    def get_material_users(self, material):
+        return self.materials_users[material.name]
+
     # For viewport renders, this method gets called once at the start and
     # whenever the scene or 3D viewport changes. This method is where data
     # should be read from Blender in the same thread. Typically a render
@@ -250,32 +306,46 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             self.scene_data = [0]
             first_time = True
 
+            self.default_material_shader = MeshMaterialShader(None)
+            self.materials_users = dict()
+
+            # find all materials in the scene and compile shaders
+            # for id in depsgraph.ids:
+            #     if isinstance(id, bpy.types.Material):
+            #         self.material_shaders[id.name] = MeshMaterialShader(id)
+
             # Loop over all datablocks used in the scene.
             for datablock in depsgraph.ids:
                 if isinstance(datablock, bpy.types.Object) and datablock.type == 'MESH':
                     # print(datablock.type, " ", datablock.name, flush=True)
-                    draw = BasePassRendering(datablock.data)
-                    # draw.object = datablock
-                    self.draw_calls[datablock.name] = draw
-                pass
+                    self.draw_calls[datablock.name] = self.create_mesh_draw(datablock)
+                    if datablock.active_material:
+                        self.add_material_user(datablock, datablock.active_material)
+
         else:
             first_time = False
 
+            # for upd in depsgraph.updates:
+            #     print(upd.id.name)
+            # print("", flush=True)
             # Test which datablocks changed
             for update in depsgraph.updates:
                 # print("Datablock updated: ", update.id.name, flush=True)
                 datablock = update.id
                 if isinstance(datablock, bpy.types.Object) \
-                and datablock.type == 'MESH' and update.is_updated_geometry:
+                and datablock.type == 'MESH' and (update.is_updated_geometry or update.is_updated_shading):
                     # print("mesh updated: ", datablock.name, flush=True)
                     # del self.draw_calls[datablock.name]
-                    draw = BasePassRendering(datablock.data)
-                    # draw.object = datablock
-                    self.draw_calls[datablock.name] = draw
+                    
+                    self.draw_calls[datablock.name] = self.create_mesh_draw(datablock)
 
             # Test if any material was added, removed or changed.
             if depsgraph.id_type_updated('MATERIAL'):
-                # print("Materials updated")
+                # print("Materials updated", flush=True)
+                for update in depsgraph.updates:
+                    if (isinstance(update.id, bpy.types.Material)):
+                        # print(f"material updated: {update.id.name}", flush=True)
+                        self.material_shaders[update.id.name].update()
                 pass
 
         # Loop over all object instances in the scene.
@@ -333,14 +403,14 @@ class CustomRenderEngine(bpy.types.RenderEngine):
         basecolor = gpu.types.GPUTexture(fb_size, format=gbuffer_format)
         shadowcolor = gpu.types.GPUTexture(fb_size, format=gbuffer_format)
         normal = gpu.types.GPUTexture(fb_size, format=normal_format)
-        t_lighting_mask = gpu.types.GPUTexture(fb_size, format="R8")
+        t_shadingmodel = gpu.types.GPUTexture(fb_size, format="R8UI")
         z = gpu.types.GPUTexture(fb_size, format="DEPTH_COMPONENT24")
-        gbuffer = gpu.types.GPUFrameBuffer(depth_slot=z, color_slots=(basecolor, shadowcolor, normal, t_lighting_mask))
+        gbuffer = gpu.types.GPUFrameBuffer(depth_slot=z, color_slots=(basecolor, shadowcolor, normal, t_shadingmodel))
 
         with gbuffer.bind():
 
             gpu.state.active_framebuffer_get().clear(color=(0, 0, 0, 0), depth=1.0)
-            t_lighting_mask.clear(format="FLOAT", value=(1, 1, 1, 1))
+            t_shadingmodel.clear(format="UBYTE", value=tuple([0]))
 
             # Bind (fragment) shader that converts from scene linear to display space,
             # self.bind_display_space_shader(scene)
@@ -367,16 +437,17 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             gpu.state.depth_test_set("ALWAYS")
 
             ps_prefix = "\n#define BACKGROUND_COLOR " + ("1" if settings.world_color_clear else "0") + "\n"
+            ps_prefix += CustomRenderEngineMaterialSettings.get_shadingmodels_define()
             shader = gpu.types.GPUShader(VERTEX_2D, ps_prefix + PIXEL_SCENE_LIGHTING)
             shader.bind()
             shader.uniform_float("scene_color", settings.world_color)
             shader.uniform_sampler("tbasecolor", basecolor)
-            shader.uniform_sampler("tmask", t_lighting_mask)
+            shader.uniform_sampler("tshadingmodel", t_shadingmodel)
             batch_for_shader(shader, "TRI_FAN", {"pos": ((0, 0), (1, 0), (1, 1), (0, 1))}).draw(shader)
 
             gpu.state.blend_set("ADDITIVE")
             for light in self.lights:
-                light.draw(context.region_data, z, basecolor, shadowcolor, normal, t_lighting_mask)
+                light.draw(context.region_data, z, basecolor, shadowcolor, normal, t_shadingmodel)
             
             gpu.state.blend_set("NONE")
         
@@ -432,6 +503,10 @@ class CustomRenderEngine(bpy.types.RenderEngine):
                 present_pixel_shader = PIXEL_DEFERRED_WORLDPOS
                 out_texture = tscenelit
                 pixel_shader_prefix = ""
+            case "SHADINGMODEL":
+                present_pixel_shader = PIXEL_SHADINGMODEL
+                pixel_shader_prefix = CustomRenderEngineMaterialSettings.get_shadingmodels_define()
+                out_texture = t_shadingmodel
 
         with fb.bind():
             if settings.world_color_clear:
@@ -461,7 +536,76 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             except ValueError:
                 pass
             batch.draw(shader)
-            
+
+# class MeshShader:
+#     def __init__(self, vertex_path, pixel_path, geometry_path=None):
+#         if len(vertex_path) == 0 or len(pixel_path) == 0:
+#             raise ValueError
+#         vertex = open(vertex_path).read()
+#         pixel = open(pixel_path).read()
+#         geometry = ""
+#         if geometry_path:
+#             geometry = open(geometry_path).read()
+
+#         self.shader = gpu.types.GPUShader(vertex, pixel, geocode=geometry)
+    
+#     def texture(self, name: str, image: bpy.types.Image, col_fallback: typing.Tuple[float, float, float]):
+#         if image:
+#             tex = gpu.texture.from_image(image)
+#         else:
+#             tex = gpu.types.GPUTexture((1, 1))
+#             tex.clear(format="FLOAT", value=(1, 1, 1, 1))
+#         self.shader.uniform_sampler(name, tex)
+
+class MeshMaterialShader():
+    def __init__(self, material):
+
+        self.shader = gpu.types.GPUShader(
+            open("shaders/VertexShader.glsl").read(),
+            open("shaders/BasePassPixelShader.glsl").read(),
+            geocode=open("shaders/GeometryShader.glsl").read())
+        # print("compiling material: " + ("default" if not material else material.name), flush=True)
+        self.material = material
+        self.update()
+
+    def update(self):
+        self.tbasecolor = gpu.types.GPUTexture((1, 1))
+        self.tbasecolor.clear(format="FLOAT", value=(1, 1, 1, 1))
+        
+        self.tshadowtint = gpu.types.GPUTexture((1, 1))
+        self.tshadowtint.clear(format="FLOAT", value=(0, 0, 0, 1))
+
+        try:
+            basecolor = bpy.data.images[self.material.custom_settings.tex_base_color]
+            self.tbasecolor = gpu.texture.from_image(basecolor)
+        except (AttributeError, KeyError):
+            pass
+
+        try:
+            shadowtint = bpy.data.images[self.material.custom_settings.tex_shadow_tint]
+            self.tshadowtint = gpu.texture.from_image(shadowtint)
+        except (AttributeError, KeyError):
+            pass
+
+        if self.material:
+            self.col_basecolor = tuple(self.material.diffuse_color[:3])
+            # print(f"{self.material} {self.col_basecolor}", flush=True)
+            self.shadingmodel = CustomRenderEngineMaterialSettings.get_shadingmodel_value(
+                self.material.custom_settings.shading_model
+            )
+            # print(f"{self.material.name} {self.shadingmodel}", flush=True)
+        else:
+            self.col_basecolor = (1, 1, 1)
+            self.shadingmodel = 1
+    
+    def bind(self):
+        self.shader.bind()
+        self.shader.uniform_sampler("tbasecolor", self.tbasecolor)
+        self.shader.uniform_sampler("tshadowtint", self.tshadowtint)
+        self.shader.uniform_float("col_basecolor", self.col_basecolor)
+        self.shader.uniform_int("shadingmodel", self.shadingmodel)
+        return self.shader
+
 class MeshDraw:
     def __init__(self, mesh):
 
@@ -566,15 +710,23 @@ class MeshDraw:
         self.batch.draw(self.shader)
 
 class BasePassRendering(MeshDraw):
-    def create_shaders(self):
-        self.shader = gpu.types.GPUShader(
-            VERTEX_SHADER,
-            open("shaders/BasePassPixelShader.glsl").read(),
-            geocode=GEOMETRY_SHADER)
+
+    def __init__(self, mesh, mesh_material_shader: MeshMaterialShader):
+        # super().__init__(mesh)
+        self.matshader = mesh_material_shader
+        self.shader = mesh_material_shader.shader
+        self.create_batch(mesh)
+
+    # def create_shaders(self):
+    #     self.shader = gpu.types.GPUShader(
+    #         VERTEX_SHADER,
+    #         open("shaders/BasePassPixelShader.glsl").read(),
+    #         geocode=GEOMETRY_SHADER)
 
     def draw(self, transform, region_data, settings):
-        shader = self.shader
-        shader.bind()
+
+        shader = self.matshader.bind()
+        # shader.bind()
 
         shader.uniform_float("matrix_world", transform)
         shader.uniform_float("view_matrix", region_data.view_matrix)
@@ -587,19 +739,27 @@ class BasePassRendering(MeshDraw):
         shader.uniform_bool("use_vertexcolor_alpha", [settings.use_vertexcolor_alpha])
         shader.uniform_bool("use_vertexcolor_rgb", [settings.use_vertexcolor_rgb])
         
-        if settings.basecolor_texture:
-            tbasecolor = gpu.texture.from_image(bpy.data.images[settings.basecolor_texture])
-        else:
-            tbasecolor = gpu.types.GPUTexture((1, 1))
-            tbasecolor.clear(format="FLOAT", value=(0.5, 0.5, 0.5, 1))
-        shader.uniform_sampler("tbasecolor", tbasecolor)
+        # if settings.basecolor_texture:
+        #     tbasecolor = gpu.texture.from_image(bpy.data.images[settings.basecolor_texture])
+        # else:
+        #     tbasecolor = gpu.types.GPUTexture((1, 1))
+        #     tbasecolor.clear(format="FLOAT", value=(0.5, 0.5, 0.5, 1))
+        # shader.uniform_sampler("tbasecolor", tbasecolor)
         
-        if settings.shadowtint_texture:
-            tshadowtint = gpu.texture.from_image(bpy.data.images[settings.shadowtint_texture])
-        else:
-            tshadowtint = gpu.types.GPUTexture((1, 1))
-            tshadowtint.clear(format="FLOAT", value=(0, 0, 0, 1))
-        shader.uniform_sampler("tshadowtint", tshadowtint)
+        # if settings.shadowtint_texture:
+        #     tshadowtint = gpu.texture.from_image(bpy.data.images[settings.shadowtint_texture])
+        # else:
+        #     tshadowtint = gpu.types.GPUTexture((1, 1))
+        #     tshadowtint.clear(format="FLOAT", value=(0, 0, 0, 1))
+        # shader.uniform_sampler("tshadowtint", tshadowtint)
+        
+        # tbasecolor = gpu.types.GPUTexture((1, 1))
+        # tbasecolor.clear(format="FLOAT", value=(1, 1, 1, 1))
+        # tshadowtint = gpu.types.GPUTexture((1, 1))
+        # tshadowtint.clear(format="FLOAT", value=(0, 0, 0, 1))
+        # self.shader.bind()
+        # self.shader.uniform_sampler("tbasecolor", tbasecolor)
+        # self.shader.uniform_sampler("tshadowtint", tshadowtint)
 
         self.batch.draw(shader)
 
@@ -610,7 +770,7 @@ class LightRendering:
         self.create_shader()
     
     def get_defines(self):
-        return ""
+        return CustomRenderEngineMaterialSettings.get_shadingmodels_define()
     
     # def create_shader_info(self):
     #     self.shaderinfo = gpu.types.GPUShaderCreateInfo()
@@ -641,14 +801,14 @@ class LightRendering:
         except ValueError:
             pass
 
-    def draw(self, region_data, tdepth, tbasecolor, tshadowcolor, tworldnormal, tmask):
+    def draw(self, region_data, tdepth, tbasecolor, tshadowcolor, tworldnormal, tshadingmodel):
         shader = self.shader
         shader.bind()
         shader.uniform_sampler("tdepth", tdepth)
         shader.uniform_sampler("tbasecolor", tbasecolor)
         shader.uniform_sampler("tshadowcolor", tshadowcolor)
         shader.uniform_sampler("tworldnormal", tworldnormal)
-        shader.uniform_sampler("tmask", tmask)
+        shader.uniform_sampler("tshadingmodel", tshadingmodel)
 
         self.set_uniforms(region_data)
 
@@ -723,6 +883,7 @@ class CustomRenderEngineSettings(bpy.types.PropertyGroup):
             ("NORMAL", "World Normal", ""),
             ("POSITION", "World Position", ""),
             ("DEPTH", "Depth", ""),
+            ("SHADINGMODEL", "Shading Model", ""),
         ],
         name="Out Buffer",
         options=set()
