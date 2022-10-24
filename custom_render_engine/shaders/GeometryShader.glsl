@@ -16,8 +16,7 @@ out vec2 uv;
 out vec3 view;
 out float outline;
 
-uniform mat4 view_matrix;
-uniform mat4 projection_matrix;
+uniform mat4 mat_view_projection;
 
 uniform bool render_outlines;
 uniform float outline_width;
@@ -27,8 +26,7 @@ uniform float depth_scale_exponent;
 
 const float OFFSET_SCALE = 0.01;
 
-mat4 perspective_matrix = projection_matrix * view_matrix;
-vec4 view_location = inverse(view_matrix) * vec4(0, 0, 0, 1);
+vec4 view_location = inverse(mat_view_projection) * vec4(0, 0, 0, 1) / (inverse(mat_view_projection) * vec4(0, 0, 0, 1)).w;
 
 vec4 offset_vertex(vec4 position, vec3 normal, vec3 tangent, float tangent_sign, vec4 vertex_color)
 {
@@ -49,7 +47,7 @@ vec4 offset_vertex(vec4 position, vec3 normal, vec3 tangent, float tangent_sign,
 
 void emit_original_vertex(int index)
 {
-    gl_Position = perspective_matrix * gl_in[index].gl_Position;
+    gl_Position = mat_view_projection * gl_in[index].gl_Position;
     normal = world_normal[index];
     tangent = world_tangent[index];
     vcolor = vertex_color[index];
@@ -69,11 +67,11 @@ void main()
     if (render_outlines)
     {
         outline = 1;
-        gl_Position = perspective_matrix * offset_vertex(gl_in[2].gl_Position, world_normal[2], world_tangent[2], tangent_sign[2], vertex_color[2]);
+        gl_Position = mat_view_projection * offset_vertex(gl_in[2].gl_Position, world_normal[2], world_tangent[2], tangent_sign[2], vertex_color[2]);
         EmitVertex();
-        gl_Position = perspective_matrix * offset_vertex(gl_in[1].gl_Position, world_normal[1], world_tangent[1], tangent_sign[1], vertex_color[1]);
+        gl_Position = mat_view_projection * offset_vertex(gl_in[1].gl_Position, world_normal[1], world_tangent[1], tangent_sign[1], vertex_color[1]);
         EmitVertex();
-        gl_Position = perspective_matrix * offset_vertex(gl_in[0].gl_Position, world_normal[0], world_tangent[0], tangent_sign[0], vertex_color[0]);
+        gl_Position = mat_view_projection * offset_vertex(gl_in[0].gl_Position, world_normal[0], world_tangent[0], tangent_sign[0], vertex_color[0]);
         EmitVertex();
         EndPrimitive();
     }

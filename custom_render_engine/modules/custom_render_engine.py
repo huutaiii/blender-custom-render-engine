@@ -78,9 +78,9 @@ PIXEL_FXAA = """
             vec4(0.0),
             vec4(0.0),
             vec4(0.0),
-            0.75,
-            0.166,
-            0.0833,
+            0.5,
+            0.125,
+            0.0312,
             0.0,
             0.0,
             0.0,
@@ -421,7 +421,8 @@ class CustomRenderEngine(bpy.types.RenderEngine):
 
             for object in self.mesh_objects:
                 draw = self.draw_calls[object.name]
-                draw.draw(object.matrix_world, context.region_data, settings)
+                mvp = context.region_data.window_matrix @ context.region_data.view_matrix
+                draw.draw(object.matrix_world, mvp, settings)
             # for key, draw in self.draw_calls.items():
             #     print(draw.object.name, " ", draw.object.hide_viewport, flush=True)
             #     draw.draw(draw.object.matrix_world, context.region_data, self.lights, settings)
@@ -723,14 +724,13 @@ class BasePassRendering(MeshDraw):
     #         open("shaders/BasePassPixelShader.glsl").read(),
     #         geocode=GEOMETRY_SHADER)
 
-    def draw(self, transform, region_data, settings):
+    def draw(self, transform, view_projection_matrix, settings):
 
         shader = self.matshader.bind()
         # shader.bind()
 
         shader.uniform_float("matrix_world", transform)
-        shader.uniform_float("view_matrix", region_data.view_matrix)
-        shader.uniform_float("projection_matrix", region_data.window_matrix)
+        shader.uniform_float("mat_view_projection", view_projection_matrix)
 
         shader.uniform_bool("render_outlines", [settings.enable_outline])
         shader.uniform_float("outline_width", settings.outline_width)
