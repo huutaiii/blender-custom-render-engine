@@ -14,6 +14,7 @@ import numpy as np
 
 from .material import CustomRenderEngineMaterialSettings
 # print(material.__name__, flush=True)
+from .shadow import DepthOnlyMeshRendering, DirectionalShadowRendering
 
 VERTEX_SHADER = open("shaders/VertexShader.glsl").read()
 GEOMETRY_SHADER = open("shaders/GeometryShader.glsl").read()
@@ -208,6 +209,50 @@ PIXEL_SCENE_LIGHTING = """
             color.rgb = mix(tex.rgb, vec3(.05), 1 - tex.a);
         #endif
         }
+        color.a = 1;
+    }
+"""
+
+PIXEL_DEFERRED_SHADOWS_ONLY = """
+    in vec2 uv;
+    out vec4 color;
+
+    uniform sampler2D scene_depth;
+    uniform sampler2D shadow_depth;
+    uniform mat4 mat_view_projection;
+    uniform mat4 mat_light;
+
+    int num_lights_total = 1;
+    float bias = 0.001;
+    
+    vec4 GetWorldPos()
+    {
+        vec4 pos;
+        pos.w = 1;
+        pos.xy = uv * 2 - 1;
+        pos.z = texture(scene_depth, uv).r * 2 - 1;
+        pos = inverse(mat_view_projection) * pos;
+        pos /= pos.w;
+        return pos;
+    }
+
+    float GetShadowFactor(vec4 WorldPos)
+    {
+        vec4 LightPos = (mat_light) * WorldPos;
+        LightPos /= LightPos.w;
+        LightPos * 0.5 + 0.5;
+        float z = texture(shadow_depth, LightPos.xy).r;
+        return LightPos.z -1 < z ? 1 : 0;
+    }
+
+    void main()
+    {
+        gl_FragDepth = texture(scene_depth, uv).r;
+        color.rgb = gl_FragDepth < 1 ? vec3(1, 1, 1) : vec3(0);
+        float shadow = GetShadowFactor(GetWorldPos());
+        color.rgb *= shadow;
+
+        color.rgb = fract(GetWorldPos().xyz);
         color.a = 1;
     }
 """
@@ -430,36 +475,56 @@ class CustomRenderEngine(bpy.types.RenderEngine):
 
             # self.unbind_display_space_shader()
         
-        tscenelit = gpu.types.GPUTexture(fb_size, format=final_color_format)
-        lighting = gpu.types.GPUFrameBuffer(color_slots=(tscenelit))
-
-        with lighting.bind():
-            lighting.clear(color=(0, 0, 0, 0))
-            gpu.state.depth_test_set("ALWAYS")
-
-            ps_prefix = "\n#define BACKGROUND_COLOR " + ("1" if settings.world_color_clear else "0") + "\n"
-            ps_prefix += CustomRenderEngineMaterialSettings.get_shadingmodels_define()
-            shader = gpu.types.GPUShader(VERTEX_2D, ps_prefix + PIXEL_SCENE_LIGHTING)
-            shader.bind()
-            shader.uniform_float("scene_color", settings.world_color)
-            shader.uniform_sampler("tbasecolor", basecolor)
-            shader.uniform_sampler("tshadingmodel", t_shadingmodel)
-            batch_for_shader(shader, "TRI_FAN", {"pos": ((0, 0), (1, 0), (1, 1), (0, 1))}).draw(shader)
-
-            gpu.state.blend_set("ADDITIVE")
-            for light in self.lights:
-                light.draw(context.region_data, z, basecolor, shadowcolor, normal, t_shadingmodel)
+        shadow_render = DirectionalShadowRendering()
+        shadow_render.draw_shadowmap(self.lights[0].object, self.mesh_objects, self.draw_calls)
+    
+        if settings.out_buffer == "SHADOWMAP":
+            tscenelit = gpu.types.GPUTexture(fb_size, format=final_color_format)
+            lighting = gpu.types.GPUFrameBuffer(color_slots=(tscenelit))
             
-            gpu.state.blend_set("NONE")
+            with lighting.bind():
+                lighting.clear(color=(0, 0, 0, 0))
+                gpu.state.depth_test_set("ALWAYS")
+                gpu.state.depth_mask_set(True)
+                shader = gpu.types.GPUShader(VERTEX_2D, PIXEL_DEFERRED_SHADOWS_ONLY)
+                shader.bind()
+                shader.uniform_float("mat_view_projection", context.region_data.window_matrix @ context.region_data.view_matrix)
+                # shader.uniform_float("mat_light", shadow_render.get_light_matrix())
+                shader.uniform_sampler("scene_depth", z)
+                shader.uniform_sampler("shadow_depth", shadow_render.get_depth_texture())
+                batch_for_shader(shader, "TRI_FAN", {"pos": ((0, 0), (1, 0), (1, 1), (0, 1))}).draw(shader)
         
-        trgbl = gpu.types.GPUTexture(fb_size, format=final_color_format)
-        rgbl = gpu.types.GPUFrameBuffer(color_slots = (trgbl))
+        if settings.out_buffer == "SCENELIT":
+            tscenelit = gpu.types.GPUTexture(fb_size, format=final_color_format)
+            lighting = gpu.types.GPUFrameBuffer(color_slots=(tscenelit))
 
-        with rgbl.bind():
-            shader = gpu.types.GPUShader(VERTEX_2D, PIXEL_RGBL)
-            shader.bind()
-            shader.uniform_sampler("image", tscenelit)
-            batch_for_shader(shader, "TRI_FAN", {"pos": ((0, 0), (1, 0), (1, 1), (0, 1))}).draw(shader)
+            with lighting.bind():
+                lighting.clear(color=(0, 0, 0, 0))
+                gpu.state.depth_test_set("ALWAYS")
+
+                ps_prefix = "\n#define BACKGROUND_COLOR " + ("1" if settings.world_color_clear else "0") + "\n"
+                ps_prefix += CustomRenderEngineMaterialSettings.get_shadingmodels_define()
+                shader = gpu.types.GPUShader(VERTEX_2D, ps_prefix + PIXEL_SCENE_LIGHTING)
+                shader.bind()
+                shader.uniform_float("scene_color", settings.world_color)
+                shader.uniform_sampler("tbasecolor", basecolor)
+                shader.uniform_sampler("tshadingmodel", t_shadingmodel)
+                batch_for_shader(shader, "TRI_FAN", {"pos": ((0, 0), (1, 0), (1, 1), (0, 1))}).draw(shader)
+
+                gpu.state.blend_set("ADDITIVE")
+                for light in self.lights:
+                    light.draw(context.region_data, z, basecolor, shadowcolor, normal, t_shadingmodel)
+                
+                gpu.state.blend_set("NONE")
+            
+            trgbl = gpu.types.GPUTexture(fb_size, format=final_color_format)
+            rgbl = gpu.types.GPUFrameBuffer(color_slots = (trgbl))
+
+            with rgbl.bind():
+                shader = gpu.types.GPUShader(VERTEX_2D, PIXEL_RGBL)
+                shader.bind()
+                shader.uniform_sampler("image", tscenelit)
+                batch_for_shader(shader, "TRI_FAN", {"pos": ((0, 0), (1, 0), (1, 1), (0, 1))}).draw(shader)
 
         present_pixel_shader = PIXEL_2D
 
@@ -502,12 +567,19 @@ class CustomRenderEngine(bpy.types.RenderEngine):
                 """
             case "POSITION":
                 present_pixel_shader = PIXEL_DEFERRED_WORLDPOS
-                out_texture = tscenelit
+                out_texture = None
                 pixel_shader_prefix = ""
             case "SHADINGMODEL":
                 present_pixel_shader = PIXEL_SHADINGMODEL
                 pixel_shader_prefix = CustomRenderEngineMaterialSettings.get_shadingmodels_define()
                 out_texture = t_shadingmodel
+            case "SHADOWMAP":
+                out_texture = shadow_render.get_depth_texture()
+                pixel_shader_prefix = """
+                    vec4 finalize_color(vec4 incolor) { return vec4(incolor.xxx, 1); }
+                """
+                out_texture = tscenelit
+                present_pixel_shader = PIXEL_DEFERRED_SHADOWS_ONLY
 
         with fb.bind():
             if settings.world_color_clear:
@@ -523,7 +595,8 @@ class CustomRenderEngine(bpy.types.RenderEngine):
             vbo.attr_fill("pos", coords)
             batch = gpu.types.GPUBatch(type="TRI_FAN", buf=vbo)
             shader.bind()
-            shader.uniform_sampler("image", out_texture)
+            if out_texture:
+                shader.uniform_sampler("image", out_texture)
             shader.uniform_sampler("depth", z)
             if settings.out_buffer == "POSITION":
                 region_data = context.region_data
@@ -884,6 +957,7 @@ class CustomRenderEngineSettings(bpy.types.PropertyGroup):
             ("POSITION", "World Position", ""),
             ("DEPTH", "Depth", ""),
             ("SHADINGMODEL", "Shading Model", ""),
+            ("SHADOWMAP", "ShadowMap", ""),
         ],
         name="Out Buffer",
         options=set()
